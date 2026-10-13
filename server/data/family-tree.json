@@ -1,0 +1,52 @@
+{
+  "version": 78,
+  "persons": {
+    "user:sarah": {
+      "id": "user:sarah",
+      "name": "Sarah",
+      "gender": "F"
+    },
+    "user:robert": {
+      "id": "user:robert",
+      "name": "Robert",
+      "gender": "M"
+    },
+    "user:linda": {
+      "id": "user:linda",
+      "name": "Linda",
+      "gender": "F"
+    },
+    "user:mike": {
+      "id": "user:mike",
+      "name": "Mike",
+      "gender": "M"
+    }
+  },
+  "relationships": [],
+  "requests": [
+    {
+      "id": "req_94a00b69-2014-4500-89d8-cf9f5d6b2e19",
+      "fromId": "user:sarah",
+      "toId": "user:robert",
+      "relation": "Father",
+      "status": "accepted",
+      "createdAt": 1791882021345
+    },
+    {
+      "id": "req_68c118d3-3a4a-4a0a-848f-139030009c3d",
+      "fromId": "user:sarah",
+      "toId": "user:linda",
+      "relation": "Mother",
+      "status": "accepted",
+      "createdAt": 1791882058279
+    },
+    {
+      "id": "req_6d9c466c-3574-4e0a-b136-53f3872d4f8a",
+      "fromId": "user:sarah",
+      "toId": "user:linda",
+      "relation": "Spouse",
+      "status": "rejected",
+      "createdAt": 1791882202570
+    }
+  ]
+}

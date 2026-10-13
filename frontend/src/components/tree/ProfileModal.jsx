@@ -7,14 +7,14 @@ const ProfileModal = ({
   onClose,
 }) => {
   const person = selectedPerson || {
-    name: "Tom Smith",
+    name: "Family Member",
     relation: "Me",
     isMe: true,
   };
 
   return (
     <div
-      className="relative-modal-overlay"
+      className="tree-modal-overlay"
       onClick={onClose}
     >
       <div
@@ -25,43 +25,41 @@ const ProfileModal = ({
         <button
           className="modal-close"
           onClick={onClose}
+          type="button"
         >
           ×
         </button>
 
         {/* AVATAR */}
-        <div className="profile-large-avatar">
-          <User size={42} />
+        <div className="profile-modal-avatar">
+          <User size={36} />
         </div>
 
         {/* NAME */}
         <h2>{person.name}</h2>
 
-        <span>
-          {person.isMe ? "Me" : person.relation}
-        </span>
+        <p style={{ margin: "4px 0 16px", color: "#888", fontSize: "14px" }}>
+          {person.isMe ? "You" : person.relation}
+        </p>
 
-        {/* INFORMATION */}
-        <div className="profile-info">
-          <div>
-            <small>Relationship</small>
-
-            <strong>
-              {person.isMe ? "Self" : person.relation}
-            </strong>
+        {/* DETAILS */}
+        <div className="profile-details">
+          <div className="profile-detail-card">
+            <span>Relationship</span>
+            <strong>{person.isMe ? "Self" : person.relation}</strong>
           </div>
 
-          <div>
-            <small>Family Members</small>
-
+          <div className="profile-detail-card">
+            <span>Family Members</span>
             <strong>{memberCount}</strong>
           </div>
         </div>
 
         {/* CLOSE BUTTON */}
         <button
-          className="relative-add-button profile-close-button"
+          className="profile-close-btn"
           onClick={onClose}
+          type="button"
         >
           Close
         </button>

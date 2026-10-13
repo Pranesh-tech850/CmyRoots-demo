@@ -1,1229 +1,326 @@
-import React, { useState, useMemo } from "react";
-
-import {
-  ReactFlow,
-  useNodesState,
-  useEdgesState,
-} from "@xyflow/react";
-
+import React, { useState, useMemo, useEffect } from "react";
+import { ReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-
-import {
-  User,
-  UserPlus,
-} from "lucide-react";
+import { User, UserPlus, Trash2 } from "lucide-react";
 
 import familyTree from "../../assets/family-tree.png";
-
 import "../../styles/TreePage.css";
 
 import FamilyNode from "./FamilyNode";
 import AddRelativeModal from "./AddRelativeModal";
 import ProfileModal from "./ProfileModal";
+import { buildGraph, getLabel, layoutTree, normName } from "./familyLogic";
 
-/* =========================================================
-   NODE TYPE
-========================================================= */
+const nodeTypes = { familyNode: FamilyNode };
+const edgeStyle = { stroke: "#9ca3af", strokeWidth: 1.5 };
 
-const nodeTypes = {
-  familyNode: FamilyNode,
-};
+const TreePage = ({ socket, currentUser }) => {
+  const [snapshot, setSnapshot] = useState({
+    version: 0,
+    persons: [],
+    relationships: [],
+    requests: [],
+  });
 
-/* =========================================================
-   RELATION SLOTS (predefined templates)
+  useEffect(() => {
+    if (!socket) return;
 
-   Offsets are relative to the person the slot belongs to.
-   `dir` is the side extra people of the same relation
-   are pushed to when the slot is already filled.
+    const fetchState = () =>
+      socket.emit("tree:get", (state) => state && setSnapshot(state));
 
-            Father      Mother
+    socket.on("tree:state", setSnapshot);
+    socket.on("connect", fetchState);
+    fetchState();
 
-   Brother  -----  Me  -----  Spouse
-   Sister
+    return () => {
+      socket.off("tree:state", setSnapshot);
+      socket.off("connect", fetchState);
+    };
+  }, [socket]);
 
-            Son         Daughter
-========================================================= */
+  const [showAddRelative, setShowAddRelative] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [relativeName, setRelativeName] = useState("");
+  const [selectedRelation, setSelectedRelation] = useState("Father");
+  const [modalStep, setModalStep] = useState("relation");
+  const [modalMode, setModalMode] = useState("propose");
+  const [selectedPersonId, setSelectedPersonId] = useState(null);
 
-const SLOT_OFFSETS = {
-  Father: { x: -100, y: -190, dir: -1 },
-  Mother: { x: 100, y: -190, dir: 1 },
-  Brother: { x: -240, y: -70, dir: -1 },
-  Sister: { x: -240, y: 90, dir: -1 },
-  Spouse: { x: 240, y: 0, dir: 1 },
-  Son: { x: -100, y: 190, dir: -1 },
-  Daughter: { x: 100, y: 190, dir: 1 },
-};
+  const graph = useMemo(() => buildGraph(snapshot), [snapshot]);
 
-const buildEmptySlots = (ownerId, ownerPosition) =>
-  Object.entries(SLOT_OFFSETS).map(([relation, offset]) => ({
-    id: `${ownerId}-slot-${relation.toLowerCase()}`,
-    type: "familyNode",
-    position: {
-      x: ownerPosition.x + offset.x,
-      y: ownerPosition.y + offset.y,
-    },
-    data: {
-      name: "",
-      relation,
-      isMe: false,
-      isEmpty: true,
-      slotOf: ownerId,
-    },
-  }));
-
-/* =========================================================
-   INITIAL NODE
-========================================================= */
-
-const initialNodes = [
-  {
-    id: "tom",
-
-    type: "familyNode",
-
-    position: {
-      x: 500,
-      y: 300,
-    },
-
-    data: {
-      name: "Tom Smith",
-      relation: "Me",
-      isMe: true,
-    },
-  },
-
-  /* Empty template cards around Me */
-  ...buildEmptySlots("tom", { x: 500, y: 300 }),
-];
-
-/* =========================================================
-   INITIAL EDGES
-========================================================= */
-
-const initialEdges = [];
-
-/* =========================================================
-   RELATION CONFIGURATION
-
-   Father    -> TOP
-   Mother    -> TOP
-
-   Brother   -> RIGHT
-   Sister    -> LEFT
-   Spouse    -> LEFT
-
-   Son       -> BOTTOM
-   Daughter  -> BOTTOM
-========================================================= */
-
-const RELATION_CONFIG = {
-  Father: {
-    direction: "top",
-  },
-
-  Mother: {
-    direction: "top",
-  },
-
-  Brother: {
-    direction: "right",
-  },
-
-  Sister: {
-    direction: "left",
-  },
-
-  Spouse: {
-    direction: "left",
-  },
-
-  Son: {
-    direction: "bottom",
-  },
-
-  Daughter: {
-    direction: "bottom",
-  },
-};
-
-/* =========================================================
-   TREE PAGE
-========================================================= */
-
-const TreePage = () => {
-
-  /* =======================================================
-     MODAL STATES
-  ======================================================= */
-
-  const [showAddRelative, setShowAddRelative] =
-    useState(false);
-
-  const [showProfile, setShowProfile] =
-    useState(false);
-
-
-  /* =======================================================
-     FORM STATES
-  ======================================================= */
-
-  const [relativeName, setRelativeName] =
-    useState("");
-
-  const [selectedRelation, setSelectedRelation] =
-    useState("Father");
-
-
-  const [modalStep, setModalStep] =
-    useState("relation");
-
-
-  /* =======================================================
-     SELECTED PERSON
-  ======================================================= */
-
-  const [selectedPersonId, setSelectedPersonId] =
-    useState("tom");
-
-
-  /* =======================================================
-     REACT FLOW STATES
-  ======================================================= */
-
-  const [nodes, setNodes, onNodesChange] =
-    useNodesState(initialNodes);
-
-  const [edges, setEdges, onEdgesChange] =
-    useEdgesState(initialEdges);
-
-
-  /* =======================================================
-     FIND SELECTED PERSON
-  ======================================================= */
-
-  const getSelectedPerson = () => {
-
-    return nodes.find(
-      (node) =>
-        node.id === selectedPersonId
-    );
-
-  };
-
-
-  /* =======================================================
-     NODES WITH SELECTION FLAG (for highlighting)
-  ======================================================= */
-
-  const displayNodes = useMemo(
+  const viewerId = useMemo(
     () =>
-      nodes.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          isSelected: node.id === selectedPersonId,
-        },
-      })),
-    [nodes, selectedPersonId]
+      snapshot.persons.find((p) => normName(p.name) === normName(currentUser))?.id,
+    [snapshot, currentUser]
   );
 
+  const activeId = graph.byId[selectedPersonId] ? selectedPersonId : viewerId;
 
-  /* =======================================================
-     NODE CLICK
-  ======================================================= */
+  const { nodes, edges } = useMemo(() => {
+    if (!viewerId) return { nodes: [], edges: [] };
 
-  const handleNodeClick = (event, node) => {
+    const { positions, placeholders } = layoutTree(graph, viewerId);
 
-    /* Empty template card -> add that relation for its owner */
+    const personNodes = Object.keys(positions).map((id) => ({
+      id,
+      type: "familyNode",
+      position: positions[id],
+      data: {
+        name: graph.byId[id].name,
+        relation: getLabel(graph, viewerId, id),
+        isMe: id === viewerId,
+        isSelected: id === activeId,
+      },
+    }));
 
+    const slotNodes = placeholders.map((slot) => ({
+      id: `slot-${slot.relation.toLowerCase()}`,
+      type: "familyNode",
+      position: slot.position,
+      data: {
+        name: "",
+        relation: slot.relation,
+        isMe: false,
+        isEmpty: true,
+        slotOf: viewerId,
+      },
+    }));
+
+    const treeEdges = snapshot.relationships
+      .filter((r) => positions[r.a] && positions[r.b])
+      .flatMap((r) => {
+        if (r.type === "parent") {
+          return [{
+            id: r.id,
+            source: r.a, sourceHandle: "bottom",
+            target: r.b, targetHandle: "top",
+            type: "smoothstep", style: edgeStyle,
+          }];
+        }
+
+        if (
+          r.type === "sibling" &&
+          [...graph.parents(r.a)].some((p) => graph.parents(r.b).has(p))
+        ) return [];
+
+        const [l, rt] =
+          positions[r.a].x <= positions[r.b].x ? [r.a, r.b] : [r.b, r.a];
+
+        return [{
+          id: r.id,
+          source: l, sourceHandle: "right",
+          target: rt, targetHandle: "left",
+          type: "smoothstep",
+          style: r.type === "sibling"
+            ? { ...edgeStyle, strokeDasharray: "5 4" }
+            : edgeStyle,
+        }];
+      });
+
+    return { nodes: [...personNodes, ...slotNodes], edges: treeEdges };
+  }, [graph, snapshot.relationships, viewerId, activeId]);
+
+  const activeNode = nodes.find((n) => n.id === activeId);
+
+  const handleNodeClick = (_event, node) => {
     if (node.data.isEmpty) {
       setSelectedPersonId(node.data.slotOf);
       setSelectedRelation(node.data.relation);
+      setModalMode("direct");
       setModalStep("details");
       setShowAddRelative(true);
       return;
     }
-
     setSelectedPersonId(node.id);
-
-    console.log(
-      "Selected person:",
-      node.data.name
-    );
-
   };
-
-
-  /* =======================================================
-     GET RELATIVES OF SELECTED PERSON
-  ======================================================= */
-
-  const getRelatives = (relation) => {
-
-    return nodes.filter((node) => {
-
-      /* Don't count selected person */
-
-      if (node.id === selectedPersonId) {
-        return false;
-      }
-
-
-      /* Check relation */
-
-      if (
-        node.data.relation !== relation
-      ) {
-        return false;
-      }
-
-
-      /* Check whether connected */
-
-      return edges.some((edge) => {
-
-        return (
-
-          (
-            edge.source === node.id &&
-            edge.target === selectedPersonId
-          )
-
-          ||
-
-          (
-            edge.target === node.id &&
-            edge.source === selectedPersonId
-          )
-
-        );
-
-      });
-
-    });
-
-  };
-
-
-  /* =======================================================
-     GET RELATION COUNT
-  ======================================================= */
-
-  const getRelationCount = (relation) => {
-
-    return getRelatives(relation).length;
-
-  };
-
-
-  /* =======================================================
-     GET POSITION FOR RELATION
-  ======================================================= */
-
-  const getPositionForRelation = (
-    relation,
-    selectedNode
-  ) => {
-
-    const slot = SLOT_OFFSETS[relation];
-
-    /* Unknown relation -> simple fallback */
-
-    if (!slot) {
-      return {
-        x: selectedNode.position.x + 220,
-        y: selectedNode.position.y,
-      };
-    }
-
-    /* Slot already filled -> push further out on its side */
-
-    const count = getRelationCount(relation);
-
-    return {
-      x:
-        selectedNode.position.x +
-        slot.x +
-        slot.dir * 200 * count,
-
-      y:
-        selectedNode.position.y + slot.y,
-    };
-
-  };
-
-
-  /* =======================================================
-     GET CONNECTION
-  ======================================================= */
-
-  const getConnection = (
-    relation,
-    selectedNode,
-    newNodeId
-  ) => {
-
-
-    /* =====================================================
-       FATHER
-       
-       Father
-          |
-         Tom
-    ===================================================== */
-
-    if (relation === "Father") {
-
-      return {
-
-        id:
-          `edge-${selectedNode.id}-${newNodeId}`,
-
-        source:
-          newNodeId,
-
-        sourceHandle:
-          "bottom",
-
-        target:
-          selectedNode.id,
-
-        targetHandle:
-          "top",
-
-      };
-
-    }
-
-
-    /* =====================================================
-       MOTHER
-    ===================================================== */
-
-    if (relation === "Mother") {
-
-      return {
-
-        id:
-          `edge-${selectedNode.id}-${newNodeId}`,
-
-        source:
-          newNodeId,
-
-        sourceHandle:
-          "bottom",
-
-        target:
-          selectedNode.id,
-
-        targetHandle:
-          "top",
-
-      };
-
-    }
-
-
-    /* =====================================================
-       BROTHER
-       
-       Tom -------- Brother
-    ===================================================== */
-
-    if (relation === "Brother") {
-
-      return {
-
-        id:
-          `edge-${selectedNode.id}-${newNodeId}`,
-
-        source:
-          newNodeId,
-
-        sourceHandle:
-          "right",
-
-        target:
-          selectedNode.id,
-
-        targetHandle:
-          "left",
-
-      };
-
-    }
-
-
-    /* =====================================================
-       SISTER
-       
-       Sister -------- Tom
-    ===================================================== */
-
-    if (relation === "Sister") {
-
-      return {
-
-        id:
-          `edge-${selectedNode.id}-${newNodeId}`,
-
-        source:
-          newNodeId,
-
-        sourceHandle:
-          "right",
-
-        target:
-          selectedNode.id,
-
-        targetHandle:
-          "left",
-
-      };
-
-    }
-
-
-    /* =====================================================
-       SPOUSE
-       
-       Spouse -------- Tom
-    ===================================================== */
-
-    if (relation === "Spouse") {
-
-      return {
-
-        id:
-          `edge-${selectedNode.id}-${newNodeId}`,
-
-        source:
-          selectedNode.id,
-
-        sourceHandle:
-          "right",
-
-        target:
-          newNodeId,
-
-        targetHandle:
-          "left",
-
-      };
-
-    }
-
-
-    /* =====================================================
-       SON
-       
-       Tom
-        |
-       Son
-    ===================================================== */
-
-    if (relation === "Son") {
-
-      return {
-
-        id:
-          `edge-${selectedNode.id}-${newNodeId}`,
-
-        source:
-          selectedNode.id,
-
-        sourceHandle:
-          "bottom",
-
-        target:
-          newNodeId,
-
-        targetHandle:
-          "top",
-
-      };
-
-    }
-
-
-    /* =====================================================
-       DAUGHTER
-       
-       Tom
-        |
-       Daughter
-    ===================================================== */
-
-    if (relation === "Daughter") {
-
-      return {
-
-        id:
-          `edge-${selectedNode.id}-${newNodeId}`,
-
-        source:
-          selectedNode.id,
-
-        sourceHandle:
-          "bottom",
-
-        target:
-          newNodeId,
-
-        targetHandle:
-          "top",
-
-      };
-
-    }
-
-
-    /* =====================================================
-       DEFAULT
-    ===================================================== */
-
-    return {
-
-      id:
-        `edge-${selectedNode.id}-${newNodeId}`,
-
-      source:
-        selectedNode.id,
-
-      target:
-        newNodeId,
-
-      type:
-        "smoothstep",
-
-    };
-
-  };
-
-
-  /* =======================================================
-     FIND SPOUSE
-  ======================================================= */
-
-  const getSpouse = () => {
-
-    return nodes.find((node) => {
-
-      if (
-        node.data.relation !== "Spouse"
-      ) {
-        return false;
-      }
-
-
-      return edges.some((edge) => {
-
-        return (
-
-          (
-            edge.source === selectedPersonId &&
-            edge.target === node.id
-          )
-
-          ||
-
-          (
-            edge.target === selectedPersonId &&
-            edge.source === node.id
-          )
-
-        );
-
-      });
-
-    });
-
-  };
-
-
-  /* =======================================================
-     OPEN ADD RELATIVE
-  ======================================================= */
 
   const openAddRelative = () => {
-
+    if (!viewerId) return;
+    if (!activeId || activeId === viewerId) {
+      alert("Select another person on the tree first.");
+      return;
+    }
+    setModalMode("propose");
     setModalStep("relation");
-
-    if (!selectedPersonId) {
-
-      setSelectedPersonId("tom");
-
-    }
-
     setShowAddRelative(true);
-
   };
-
-
-  /* =======================================================
-     ADD RELATIVE
-  ======================================================= */
-
-  const handleAddRelative = () => {
-
-    /* =====================================================
-       VALIDATE NAME
-    ===================================================== */
-
-    if (!relativeName.trim()) {
-
-      alert(
-        "Please enter family member name"
-      );
-
-      return;
-
-    }
-
-
-    /* =====================================================
-       GET SELECTED PERSON
-    ===================================================== */
-
-    const selectedNode =
-      getSelectedPerson();
-
-
-    if (!selectedNode) {
-
-      alert(
-        "Please select a family member first"
-      );
-
-      return;
-
-    }
-
-
-    /* =====================================================
-       CREATE UNIQUE ID
-    ===================================================== */
-
-    /* Empty template card for this relation (if any) */
-
-    const emptySlot = nodes.find(
-      (node) =>
-        node.data.isEmpty &&
-        node.data.slotOf === selectedPersonId &&
-        node.data.relation === selectedRelation
-    );
-
-    const newNodeId = emptySlot
-      ? emptySlot.id
-      : `${selectedRelation.toLowerCase()}-${Date.now()}`;
-
-
-    /* =====================================================
-       FIND SPOUSE
-    ===================================================== */
-
-    const spouseNode =
-      getSpouse();
-
-
-    /* =====================================================
-       CALCULATE POSITION
-    ===================================================== */
-
-    const position = emptySlot
-      ? emptySlot.position
-      : getPositionForRelation(
-          selectedRelation,
-          selectedNode
-        );
-
-
-    /* =====================================================
-       CREATE NEW NODE
-    ===================================================== */
-
-    const newNode = {
-
-      id:
-        newNodeId,
-
-      type:
-        "familyNode",
-
-      position:
-        position,
-
-      data: {
-
-        name:
-          relativeName.trim(),
-
-        relation:
-          selectedRelation,
-
-        isMe:
-          false,
-
-      },
-
-    };
-
-
-    /* =====================================================
-       ADD NODE
-    ===================================================== */
-
-    setNodes((currentNodes) =>
-      emptySlot
-        ? currentNodes.map((node) =>
-            node.id === emptySlot.id ? newNode : node
-          )
-        : [...currentNodes, newNode]
-    );
-
-
-    /* =====================================================
-       CHILD + SPOUSE
-
-       Connect BOTH parents to child.
-    ===================================================== */
-
-    if (
-
-      (
-        selectedRelation === "Son" ||
-        selectedRelation === "Daughter"
-      )
-
-      &&
-
-      spouseNode
-
-    ) {
-
-      const parentEdge1 = {
-
-        id:
-          `edge-${selectedPersonId}-${newNodeId}`,
-
-        source:
-          selectedPersonId,
-
-        sourceHandle:
-          "bottom",
-
-        target:
-          newNodeId,
-
-        targetHandle:
-          "top",
-
-        type:
-          "smoothstep",
-
-        style: {
-
-          stroke:
-            "#9ca3af",
-
-          strokeWidth:
-            1.5,
-
-        },
-
-      };
-
-
-      const parentEdge2 = {
-
-        id:
-          `edge-${spouseNode.id}-${newNodeId}`,
-
-        source:
-          spouseNode.id,
-
-        sourceHandle:
-          "bottom",
-
-        target:
-          newNodeId,
-
-        targetHandle:
-          "top",
-
-        type:
-          "smoothstep",
-
-        style: {
-
-          stroke:
-            "#9ca3af",
-
-          strokeWidth:
-            1.5,
-
-        },
-
-      };
-
-
-      setEdges((currentEdges) => [
-
-        ...currentEdges,
-
-        parentEdge1,
-
-        parentEdge2,
-
-      ]);
-
-    }
-
-
-    /* =====================================================
-       NORMAL SINGLE RELATION
-    ===================================================== */
-
-    else {
-
-      const connection =
-        getConnection(
-
-          selectedRelation,
-
-          selectedNode,
-
-          newNodeId
-
-        );
-
-
-      const newEdge = {
-
-        ...connection,
-
-        type:
-          "smoothstep",
-
-        style: {
-
-          stroke:
-            "#9ca3af",
-
-          strokeWidth:
-            1.5,
-
-        },
-
-      };
-
-
-      setEdges((currentEdges) => [
-
-        ...currentEdges,
-
-        newEdge,
-
-      ]);
-
-    }
-
-
-    /* =====================================================
-       RESET
-    ===================================================== */
-
-    setRelativeName("");
-
-    setSelectedRelation("Father");
-
-    setShowAddRelative(false);
-
-  };
-
-
-  /* =======================================================
-     CLOSE ADD MODAL
-  ======================================================= */
 
   const closeAddModal = () => {
-
     setRelativeName("");
-
     setSelectedRelation("Father");
-
     setShowAddRelative(false);
-
   };
 
+  const handleModalSubmit = () => {
+    if (!socket || !activeId) {
+      alert("Not connected to the server yet");
+      return;
+    }
 
-  /* =======================================================
-     SELECTED PERSON DATA
-  ======================================================= */
+    /* ---- slot card: name typed in the box ---- */
+    if (modalMode === "direct") {
+      if (!relativeName.trim()) return alert("Please enter family member name");
 
-  const selectedPerson =
-    getSelectedPerson();
+      /* the name belongs to a registered user -> needs THEIR approval,
+         so send a request: "<that user> is my <relation>" */
+      const registered = snapshot.persons.find(
+        (p) => p.id.startsWith("user:") && normName(p.name) === normName(relativeName)
+      );
+      if (registered) {
+        if (registered.id === viewerId) {
+          return alert("You can't send a request to yourself.");
+        }
+        socket.emit(
+          "tree:sendRequest",
+          { toId: registered.id, relation: selectedRelation },
+          (res) => {
+            if (!res?.ok) return alert(res?.error || "Could not send request");
+            alert(
+              `Request sent: you asked ${registered.name} to be your ${selectedRelation}. Waiting for them to accept.`
+            );
+            closeAddModal();
+          }
+        );
+        return;
+      }
 
+      /* no account -> add directly, no approval needed */
+      socket.emit(
+        "tree:addRelative",
+        { personId: activeId, relation: selectedRelation, name: relativeName.trim() },
+        (res) => {
+          if (!res?.ok) return alert(res?.error || "Could not add relative");
+          closeAddModal();
+        }
+      );
+      return;
+    }
 
-  /* =======================================================
-     RENDER
-  ======================================================= */
+    /* ---- propose: "<selected person> is my <relation>" ---- */
+    if (activeId === viewerId) {
+      alert("You can't send a request to yourself.");
+      return;
+    }
+
+    /* the server fills in fromId from the socket identity */
+    socket.emit(
+      "tree:sendRequest",
+      { toId: activeId, relation: selectedRelation },
+      (res) => {
+        if (!res?.ok) return alert(res?.error || "Could not send request");
+        alert(
+          `Request sent: you asked ${
+            graph.byId[activeId]?.name || "them"
+          } to be your ${selectedRelation}. Waiting for them to accept.`
+        );
+        closeAddModal();
+      }
+    );
+  };
+
+  const handleRemove = () => {
+    if (!socket || !activeId || activeId === viewerId) return;
+    if (!window.confirm(`Remove ${graph.byId[activeId].name} from your tree?`)) return;
+    socket.emit("tree:removeRelation", { personId: activeId }, (res) => {
+      if (!res?.ok) alert(res?.error || "Could not remove");
+      else setSelectedPersonId(null);
+    });
+  };
 
   return (
-
     <main className="tree-page">
-
-      {/* =================================================
-          HEADER
-      ================================================= */}
-
       <div className="tree-header">
-
         <div>
-
-          <h1>
-            Family Tree
-          </h1>
-
+          <h1>Family Tree</h1>
           <p>
-            Explore and manage your family relationships
+            {socket && viewerId
+              ? "Explore and manage your family relationships"
+              : "Connecting to the server…"}
           </p>
-
         </div>
 
-
-        {/* =================================================
-            ACTION BUTTONS
-        ================================================= */}
-
         <div className="tree-actions">
-
-          {/* ADD RELATIVE */}
-
           <button
             className="tree-action-btn"
             onClick={openAddRelative}
+            disabled={!viewerId || !activeId || activeId === viewerId}
           >
-
             <UserPlus size={18} />
-
-            <span>
-              Add Relation
-            </span>
-
+            <span>Add Relation</span>
           </button>
-
-
-          {/* PROFILE */}
 
           <button
             className="tree-action-btn"
-            onClick={() =>
-              setShowProfile(true)
-            }
+            onClick={() => setShowProfile(true)}
+            disabled={!viewerId}
           >
-
             <User size={18} />
-
-            <span>
-              View Profile
-            </span>
-
+            <span>View Profile</span>
           </button>
 
+          {activeId && activeId !== viewerId && (
+            <button className="tree-action-btn" onClick={handleRemove}>
+              <Trash2 size={18} />
+              <span>Remove</span>
+            </button>
+          )}
         </div>
-
       </div>
 
-
-      {/* =================================================
-          FAMILY TREE
-      ================================================= */}
-
       <section className="family-tree-area">
-
-        {/* BACKGROUND */}
-
         <img
           src={familyTree}
           alt="Family Tree"
           className="family-tree-background"
         />
-
-
-        {/* REACT FLOW */}
-
         <div className="family-tree-flow">
-
           <ReactFlow
-
-            nodes={displayNodes}
-
+            key={`${viewerId}-${snapshot.version}`}
+            nodes={nodes}
             edges={edges}
-
-            onNodesChange={
-              onNodesChange
-            }
-
-            onEdgesChange={
-              onEdgesChange
-            }
-
-            onNodeClick={
-              handleNodeClick
-            }
-
-            nodeTypes={
-              nodeTypes
-            }
-
-
-            /* -----------------------------------------
-               NODE SETTINGS
-            ----------------------------------------- */
-
-            nodesDraggable={
-              false
-            }
-
-            nodesConnectable={
-              false
-            }
-
-            elementsSelectable={
-              true
-            }
-
-
-            /* -----------------------------------------
-               PAN / ZOOM
-            ----------------------------------------- */
-
-            panOnDrag={
-              false
-            }
-
-            zoomOnScroll={
-              false
-            }
-
-            zoomOnPinch={
-              false
-            }
-
-            zoomOnDoubleClick={
-              false
-            }
-
-
-            /* -----------------------------------------
-               ZOOM RANGE
-            ----------------------------------------- */
-
-            minZoom={
-              0.45
-            }
-
-            maxZoom={
-              1
-            }
-
-
-            /* -----------------------------------------
-               NO FIT VIEW
-            ----------------------------------------- */
-
-            defaultViewport={{
-              x: 0,
-              y: 0,
-              zoom: 1,
-            }}
-
-
-            /* -----------------------------------------
-               HIDE ATTRIBUTION
-            ----------------------------------------- */
-
-            proOptions={{
-              hideAttribution:
-                true,
-            }}
-
+            onNodesChange={() => {}}
+            onEdgesChange={() => {}}
+            onNodeClick={handleNodeClick}
+            nodeTypes={nodeTypes}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={true}
+            panOnDrag={true}
+            zoomOnScroll={true}
+            zoomOnPinch={true}
+            zoomOnDoubleClick={false}
+            fitView
+            fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
+            minZoom={0.3}
+            maxZoom={1}
+            proOptions={{ hideAttribution: true }}
           />
-
         </div>
-
       </section>
 
-
-      {/* =================================================
-          ADD RELATIVE MODAL
-      ================================================= */}
-
       {showAddRelative && (
-
         <AddRelativeModal
           initialStep={modalStep}
-          selectedPersonName={selectedPerson?.data.name}
-
-          relativeName={
-            relativeName
-          }
-
-          setRelativeName={
-            setRelativeName
-          }
-
-          selectedRelation={
-            selectedRelation
-          }
-
-          setSelectedRelation={
-            setSelectedRelation
-          }
-
-          onAdd={
-            handleAddRelative
-          }
-
-          onClose={
-            closeAddModal
-          }
-
+          mode={modalMode}
+          selectedPersonName={activeNode?.data?.name}
+          relativeName={relativeName}
+          setRelativeName={setRelativeName}
+          selectedRelation={selectedRelation}
+          setSelectedRelation={setSelectedRelation}
+          onAdd={handleModalSubmit}
+          onClose={closeAddModal}
         />
-
       )}
-
-
-      {/* =================================================
-          PROFILE MODAL
-      ================================================= */}
 
       {showProfile && (
-
         <ProfileModal
-
-          memberCount={
-            nodes.filter((node) => !node.data.isEmpty).length
-          }
-
-          selectedPerson={
-            selectedPerson?.data
-          }
-
-          onClose={() =>
-            setShowProfile(false)
-          }
-
+          memberCount={nodes.filter((n) => !n.data.isEmpty).length}
+          selectedPerson={activeNode?.data || (currentUser ? { name: currentUser, relation: "Me", isMe: true } : undefined)}
+          onClose={() => setShowProfile(false)}
         />
-
       )}
-
     </main>
-
   );
 };
-
 
 export default TreePage;

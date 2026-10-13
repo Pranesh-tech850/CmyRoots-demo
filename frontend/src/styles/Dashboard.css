@@ -333,6 +333,102 @@ body {
   font-size: 22px;
 }
 
+.profile-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 220px;
+  background: #ffffff;
+  border: 1px solid #eeeeee;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  padding: 8px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-dropdown-header {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-dropdown-header strong {
+  font-size: 15px;
+  color: #111;
+}
+
+.profile-dropdown-header small {
+  font-size: 12px;
+  color: #777;
+}
+
+.profile-dropdown-divider {
+  height: 1px;
+  background: #eeeeee;
+  margin: 6px 0;
+}
+
+.profile-dropdown-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #999;
+  padding: 4px 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.profile-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #333;
+  width: 100%;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.profile-dropdown-item:hover {
+  background: #f5f5f5;
+}
+
+.profile-dropdown-item.active {
+  background: #f0f0f0;
+  font-weight: 600;
+}
+
+.profile-dropdown-item.logout {
+  color: #e11d48;
+}
+
+.profile-dropdown-item.logout:hover {
+  background: #ffe4e6;
+}
+
+.notification-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #ef4444;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
 
 /* =========================================================
    COMMON PAGE CONTENT
@@ -891,323 +987,118 @@ body {
 /* =========================================================
    MESSAGES
 ========================================================= */
-
-.messages-card {
-  width: 100%;
-
-  border: 1px solid #eeeeee;
-
-  border-radius: 12px;
-
-  padding: 0 24px;
-}
-
-.message-item {
-  min-height: 90px;
-
-  border-bottom: 1px solid #eeeeee;
-
+.chat-layout {
   display: flex;
-
-  align-items: center;
-
-  gap: 16px;
-}
-
-.message-avatar {
-  width: 48px;
-  height: 48px;
-
-  border: 1px solid #dddddd;
-
-  border-radius: 50%;
-
-  display: flex;
-
-  align-items: center;
-
-  justify-content: center;
-
-  font-size: 26px;
-
-  flex-shrink: 0;
-}
-
-.message-content {
-  flex: 1;
-
-  min-width: 0;
-}
-
-.message-name {
-  display: flex;
-
-  align-items: center;
-
-  gap: 8px;
-}
-
-.message-name h3 {
-  margin: 0;
-
-  font-size: 15px;
-}
-
-.message-content p {
-  margin: 6px 0 0;
-
-  color: #777777;
-
-  font-size: 14px;
-}
-
-.message-time {
-  color: #999999;
-
-  font-size: 12px;
-}
-
-.unread-dot {
-  width: 7px;
-  height: 7px;
-
-  background: #ff4d4d;
-
-  border-radius: 50%;
-
-  flex-shrink: 0;
-}
-
-
-/* =========================================================
-   MEMBERS
-========================================================= */
-
-.members-card {
-  width: 100%;
-
-  border: 1px solid #eeeeee;
-
-  border-radius: 12px;
-
+  height: 65vh;
+  background: #fff;
+  border-radius: 18px;
+  border: 1px solid #eee;
   overflow: hidden;
 }
 
-.members-table-header,
-.members-row {
-  display: grid;
-
-  grid-template-columns:
-    2fr
-    1fr
-    2fr
-    1fr;
-
+/* contacts */
+.chat-contacts {
+  width: 240px;
+  border-right: 1px solid #eee;
+  padding: 10px;
+  overflow-y: auto;
+}
+.chat-contact {
+  display: flex;
   align-items: center;
-
-  gap: 20px;
-
-  padding: 18px 22px;
-}
-
-.members-table-header {
-  background: #f7f7f7;
-
-  color: #777777;
-
-  font-size: 13px;
-}
-
-.members-row {
-  border-top: 1px solid #eeeeee;
-
-  font-size: 14px;
-}
-
-.member-name-cell {
-  display: flex;
-
-  align-items: center;
-
-  gap: 13px;
-
-  min-width: 0;
-}
-
-.member-name-cell h3 {
-  margin: 0 0 4px;
-
-  font-size: 14px;
-}
-
-.member-name-cell p {
-  margin: 0;
-
-  color: #888888;
-
-  font-size: 12px;
-}
-
-.status {
-  color: #555555;
-}
-
-
-/* =========================================================
-   SETTINGS
-========================================================= */
-
-.settings-card {
+  gap: 12px;
   width: 100%;
-
-  border: 1px solid #eeeeee;
-
-  border-radius: 12px;
-
-  padding: 28px;
-}
-
-.settings-section {
-  padding-bottom: 28px;
-
-  margin-bottom: 28px;
-
-  border-bottom: 1px solid #eeeeee;
-}
-
-.settings-heading {
-  display: flex;
-
-  gap: 14px;
-
-  margin-bottom: 24px;
-}
-
-.settings-heading h2 {
-  margin: 0 0 5px;
-
-  font-size: 18px;
-}
-
-.settings-heading p {
-  margin: 0;
-
-  color: #888888;
-
-  font-size: 13px;
-}
-
-.settings-form {
-  display: grid;
-
-  grid-template-columns: 1fr 1fr;
-
-  gap: 20px;
-}
-
-.input-group {
-  display: flex;
-
-  flex-direction: column;
-
-  gap: 8px;
-}
-
-.input-group label {
-  font-size: 13px;
-
-  color: #555555;
-}
-
-.input-group input {
-  width: 100%;
-
-  height: 44px;
-
-  border: 1px solid #dddddd;
-
-  border-radius: 7px;
-
-  padding: 0 13px;
-
-  outline: none;
-
-  font-size: 14px;
-}
-
-.input-group input:focus {
-  border-color: #999999;
-}
-
-.settings-option {
-  width: 100%;
-
+  padding: 10px;
   border: none;
-
   background: transparent;
-
-  display: flex;
-
-  align-items: center;
-
-  gap: 15px;
-
+  border-radius: 12px;
+  cursor: pointer;
   text-align: left;
-
-  cursor: pointer;
 }
-
-.settings-option div {
-  flex: 1;
-}
-
-.settings-option h3 {
-  margin: 0 0 5px;
-
-  font-size: 14px;
-}
-
-.settings-option p {
-  margin: 0;
-
-  color: #888888;
-
-  font-size: 13px;
-}
-
-.notification-setting {
+.chat-contact:hover,
+.chat-contact.active { background: #f3f3f3; }
+.chat-avatar {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #111;
+  color: #fff;
   display: flex;
-
   align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+.chat-avatar .dot {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #bbb;
+  border: 2px solid #fff;
+}
+.chat-avatar .dot.online { background: #22c55e; }
+.chat-contact-name { flex: 1; font-weight: 500; }
+.chat-badge {
+  background: #ef4444;
+  color: #fff;
+  font-size: 12px;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
+/* window */
+.chat-window { flex: 1; display: flex; flex-direction: column; }
+.chat-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid #eee;
+  display: flex;
   justify-content: space-between;
-
-  padding: 16px 0;
-
-  border-bottom: 1px solid #eeeeee;
-
-  cursor: pointer;
+  align-items: center;
 }
+.chat-header h3 { margin: 0; }
+.chat-header span { font-size: 13px; color: #777; }
 
-.notification-setting h3 {
-  margin: 0 0 5px;
-
-  font-size: 14px;
+.chat-messages {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fafafa;
 }
-
-.notification-setting p {
-  margin: 0;
-
-  color: #888888;
-
-  font-size: 13px;
+.chat-bubble {
+  max-width: 65%;
+  padding: 9px 14px;
+  border-radius: 16px;
+  word-wrap: break-word;
 }
+.chat-bubble p { margin: 0; }
+.chat-bubble small { display: block; font-size: 11px; opacity: 0.6; margin-top: 3px; text-align: right; }
+.chat-bubble.mine { align-self: flex-end; background: #111; color: #fff; border-bottom-right-radius: 4px; }
+.chat-bubble.theirs { align-self: flex-start; background: #fff; border: 1px solid #eee; border-bottom-left-radius: 4px; }
+.chat-typing { font-size: 13px; color: #888; font-style: italic; }
 
-.notification-setting input {
-  width: 18px;
-  height: 18px;
+.chat-input {
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+  border-top: 1px solid #eee;
 }
-
+.chat-input input {
+  flex: 1;
+  padding: 11px 16px;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  outline: none;
+}
 
 /* =========================================================
    FAMILY TREE PAGE
