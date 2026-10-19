@@ -19,6 +19,7 @@ import {
   Lock,
   User,
   Save,
+  Trash2,
 } from "lucide-react";
 
 import "../styles/Dashboard.css";
@@ -67,6 +68,8 @@ const Dashboard = () => {
     sessionStorage.removeItem("chatUser");
     setCurrentUser(null);
   };
+
+  const emailInputRef = useRef(null);
 
   const currentUserAvatar =
     members.find((m) => m.name === currentUser)?.avatar || "👤";
@@ -166,6 +169,11 @@ const Dashboard = () => {
       }
     });
 
+    /* a message was deleted (by me or by the other person's delete of their own) */
+    socket.on("message:deleted", ({ id }) =>
+      setChatMessages((prev) => prev.filter((m) => m.id !== id))
+    );
+
     socket.on("presence", (users) => setOnlineUsers(users));
 
     socket.on("typing", ({ from, isTyping }) =>
@@ -216,11 +224,16 @@ const Dashboard = () => {
       /* otherwise show the next pending one (or close the popup) */
       const first = inbox[0];
       if (!first) return null;
+      const sender = treeSnapshot.persons.find((p) => p.id === first.fromId);
+      const subject =
+        first.subjectId && first.subjectId !== first.fromId
+          ? treeSnapshot.persons.find((p) => p.id === first.subjectId)
+          : null;
       return {
         ...first,
-        fromName:
-          treeSnapshot.persons.find((p) => p.id === first.fromId)?.name ||
-          "Someone",
+        fromName: sender?.name || "Someone",
+        fromEmail: sender?.email || "",
+        subjectName: subject?.name || null,
       };
     });
   }, [treeSnapshot, currentUser]);
@@ -246,6 +259,25 @@ const Dashboard = () => {
         if (!res?.ok) alert(res?.error || "Could not cancel");
       }
     );
+  };
+
+  /* my real email, as saved on the server */
+  const myEmail =
+    treeSnapshot?.persons?.find(
+      (p) => p.id === `user:${String(currentUser || "").toLowerCase()}`
+    )?.email || `${String(currentUser || "").toLowerCase()}@example.com`;
+
+  const getMemberEmail = (m) =>
+    treeSnapshot?.persons?.find(
+      (p) => p.id === `user:${m.name.toLowerCase()}`
+    )?.email || m.email;
+
+  const saveSettings = () => {
+    const email = emailInputRef.current?.value.trim();
+    if (!treeSocket) return alert("Not connected to the server yet");
+    treeSocket.emit("tree:setEmail", { email }, (res) => {
+      alert(res?.ok ? "Settings saved successfully!" : res?.error || "Could not save");
+    });
   };
 
   /* ---------- dynamic relation helper ---------- */
@@ -328,6 +360,16 @@ const Dashboard = () => {
     socket.emit("message:send", { to: activeContact, text: chatText });
     socket.emit("typing", { to: activeContact, isTyping: false });
     setChatText("");
+  };
+
+  const deleteChatMessage = (id) => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    if (!window.confirm("Delete this message for everyone?")) return;
+    socket.emit("message:delete", { id }, (res) => {
+      if (!res?.ok) alert(res?.error || "Could not delete message");
+      /* on success the server sends "message:deleted" and the bubble disappears */
+    });
   };
 
   const formatTime = (iso) =>
@@ -473,6 +515,26 @@ const Dashboard = () => {
               >
                 <p>{m.text}</p>
                 <small>{formatTime(m.time)}</small>
+                {m.from === currentUser && (
+                  <button
+                    type="button"
+                    className="chat-delete"
+                    title="Delete message"
+                    onClick={() => deleteChatMessage(m.id)}
+                    style={{
+                      marginLeft: 8,
+                      background: "none",
+                      border: "none",
+                      color: "inherit",
+                      opacity: 0.6,
+                      cursor: "pointer",
+                      verticalAlign: "middle",
+                      padding: 0,
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
               </div>
             ))}
 
@@ -534,7 +596,7 @@ const Dashboard = () => {
                   </div>
                 </div>
                 <span>{rel}</span>
-                <span>{member.email}</span>
+                <span>{getMemberEmail(member)}</span>
                 <span className="status">{member.status}</span>
               </div>
             );
@@ -562,17 +624,14 @@ const Dashboard = () => {
               <p>Update your personal information</p>
             </div>
           </div>
-          <div className="settings-form" key={currentUser}>
+          <div className="settings-form" key={`${currentUser}-${myEmail}`}>
             <div className="input-group">
               <label>Full Name</label>
               <input type="text" defaultValue={currentUser} />
             </div>
             <div className="input-group">
               <label>Email</label>
-              <input
-                type="email"
-                defaultValue={`${currentUser.toLowerCase()}@example.com`}
-              />
+              <input type="email" defaultValue={myEmail} ref={emailInputRef} />
             </div>
           </div>
         </div>
@@ -620,7 +679,7 @@ const Dashboard = () => {
         <button
           type="button"
           className="save-button"
-          onClick={() => alert("Settings saved successfully!")}
+          onClick={saveSettings}
         >
           <Save size={17} /> Save Changes
         </button>
@@ -742,7 +801,7 @@ const Dashboard = () => {
                 >
                   <div className="profile-dropdown-header">
                     <strong>{currentUser}</strong>
-                    <small>{currentUser.toLowerCase()}@example.com</small>
+                    <small>{myEmail}</small>
                   </div>
                   <div className="profile-dropdown-divider" />
                   <div className="profile-dropdown-label">Switch User</div>
@@ -787,9 +846,18 @@ const Dashboard = () => {
           <div className="request-card">
             <h3>Relationship Request</h3>
             <p>
-              <strong>{incomingRequest.fromName || "Someone"}</strong> says
-              you are their{" "}
+              <strong>{incomingRequest.fromName || "Someone"}</strong>
+              {incomingRequest.fromEmail && (
+                <> ({incomingRequest.fromEmail})</>
+              )}{" "}
+              says you are{" "}
+              {incomingRequest.subjectName
+                ? `${incomingRequest.subjectName}'s`
+                : "their"}{" "}
               <strong>{incomingRequest.relation}</strong>.
+            </p>
+            <p style={{ fontSize: 13, opacity: 0.75 }}>
+              Is this person your connection? Only accept if you know them.
             </p>
             <div className="request-actions">
               <button
@@ -819,10 +887,20 @@ const Dashboard = () => {
           </span>
           {outgoingRequests.map((r) => {
             const target =
-              treeSnapshot?.persons?.find((p) => p.id === r.toId)?.name || "?";
+              treeSnapshot?.persons?.find((p) => p.id === r.toId)?.name ||
+              r.toName ||
+              r.toEmail ||
+              "?";
             return (
               <span key={r.id} className="outgoing-chip">
-                {target} as {r.relation}
+                {target} as{" "}
+                {r.subjectId && r.subjectId !== r.fromId
+                  ? `${
+                      treeSnapshot?.persons?.find((p) => p.id === r.subjectId)
+                        ?.name || "their"
+                    }'s `
+                  : ""}
+                {r.relation}
                 <button
                   className="chip-cancel"
                   onClick={() => cancelOutgoing(r.id)}

@@ -28,8 +28,14 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { sendRequestEmail } = require("./mailer");
 
 const DATA_FILE = path.join(__dirname, "data", "family-tree.json");
+
+/* base URL used inside emailed links (set PUBLIC_URL in .env) */
+const PUBLIC_URL = (process.env.PUBLIC_URL || "http://localhost:4000").replace(/\/$/, "");
+/* an email request stays valid for 7 days */
+const REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /* relation (as shown in the UI) -> how it maps to an edge.
    "N is the <relation> of X" */
@@ -56,6 +62,29 @@ const cleanName = (s) =>
 const norm = (s) => cleanName(s).toLowerCase();
 
 const isUserId = (id) => String(id || "").startsWith("user:");
+
+/* emails: how one user finds another */
+const normEmail = (s) => String(s || "").trim().toLowerCase();
+const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail(s));
+const defaultEmail = (name) =>
+  `${norm(name).replace(/\s+/g, ".")}@example.com`;
+const esc = (v) =>
+  String(v ?? "").replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+
+/* a request is "live" while pending and not expired */
+const isLive = (r) =>
+  r.status === "pending" && (!r.expiresAt || r.expiresAt > Date.now());
+
+/* NEVER send the secret token to clients */
+const publicRequest = ({ token, ...rest }) => rest;
+
+const findByEmail = (s, email) =>
+  Object.values(s.persons).find(
+    (p) => isUserId(p.id) && p.email && normEmail(p.email) === normEmail(email)
+  );
 
 const linkId = (type, a, b) =>
   type === "parent"
@@ -148,11 +177,16 @@ function save() {
 
 let state = load();
 
+/* older saved data has no emails: give every account one */
+Object.values(state.persons).forEach((p) => {
+  if (isUserId(p.id) && !p.email) p.email = defaultEmail(p.name);
+});
+
 const snapshot = () => ({
   version: state.version,
   persons: Object.values(state.persons),
   relationships: state.relationships,
-  requests: (state.requests || []).filter((r) => r.status === "pending"),
+  requests: (state.requests || []).filter(isLive).map(publicRequest),
 });
 
 function commit(mutate) {
@@ -170,7 +204,12 @@ function ensureUser(username) {
   if (!name || findByName(state, name)) return false;
   return commit((s) => {
     const id = `user:${norm(name)}`;
-    s.persons[id] = { id, name, gender: SEED_GENDER[norm(name)] || null };
+    s.persons[id] = {
+      id,
+      name,
+      email: defaultEmail(name),
+      gender: SEED_GENDER[norm(name)] || null,
+    };
   }).ok;
 }
 
@@ -320,104 +359,304 @@ function setGender({ personId, gender }) {
   });
 }
 
-/* ---------- relationship requests ----------
-   "TO is the <relation> of FROM" */
+/* ---------- accounts ---------- */
 
-function createRequest({ fromId, toId, relation }) {
-  if (!RELATIONS[relation]) return { ok: false, error: "Unknown relationship" };
-  if (!fromId || !toId || fromId === toId)
-    return { ok: false, error: "Invalid people" };
-
+function setEmail({ personId, email }) {
   return commit((s) => {
-    const from = s.persons[fromId];
-    const to = s.persons[toId];
-    if (!from || !to) return "Person no longer exists";
-
-    s.requests = s.requests || [];
-
-    const dup = s.requests.some(
-      (r) =>
-        r.status === "pending" &&
-        r.fromId === fromId &&
-        r.toId === toId &&
-        r.relation === relation
+    const p = s.persons[personId];
+    if (!p) return "Person not found";
+    if (!isEmail(email)) return "Please enter a valid email address";
+    const e = normEmail(email);
+    const taken = Object.values(s.persons).find(
+      (x) => x.id !== personId && x.email && normEmail(x.email) === e
     );
-    if (dup) return "Request already pending";
-
-    const spec = RELATIONS[relation];
-
-    /* fail early: don't ask Linda to be a "Father" */
-    if (spec.gender && to.gender && to.gender !== spec.gender) {
-      return `${to.name} is recorded as ${
-        to.gender === "M" ? "male" : "female"
-      }, so cannot be your ${relation}`;
-    }
-
-    /* "to is the <relation> of from" */
-    const link =
-      spec.kind === "parent"
-        ? { type: "parent", a: toId, b: fromId }   // to is parent of from
-        : spec.kind === "child"
-        ? { type: "parent", a: fromId, b: toId }   // to is child of from
-        : { type: spec.kind, a: fromId, b: toId };
-    const id = linkId(link.type, link.a, link.b);
-    if (s.relationships.some((r) => r.id === id)) {
-      return `${to.name} is already the ${relation} of ${from.name}`;
-    }
-
-    s.requests.push({
-      id: `req_${crypto.randomUUID()}`,
-      fromId,
-      toId,
-      relation,
-      status: "pending",
-      createdAt: Date.now(),
-    });
+    if (taken) return "That email is already used by another member";
+    p.email = e;
     return null;
   });
 }
 
-/* Only the RECIPIENT (toId) can accept / reject.
-   Nothing touches the tree unless accepted. */
-function respondRequest({ requestId, accept, responderId }) {
-  return commit((s) => {
-    const req = (s.requests || []).find(
-      (r) => r.id === requestId && r.status === "pending"
-    );
-    if (!req) return "Request no longer exists";
-    if (req.toId !== responderId) return "Only the recipient can respond";
+/* ---------- relationship requests ----------
+   "TO is the <relation> of SUBJECT"
+   SUBJECT is normally the sender (FROM). It can also be someone else in
+   the tree, e.g. Mike asks Frank to be the Father of Robert (a grandfather).
 
-    if (!accept) {
-      req.status = "rejected";
-      return null;
+   The recipient is either
+     - a registered user (toId set), or
+     - someone only known by email (toId null, toEmail + toName set).
+       Their account entry is created ONLY when they accept.
+
+   Every request has a secret one-time token. It is emailed to the
+   recipient and is never included in the snapshot sent to clients. */
+
+function createRequest({ fromId, subjectId, toId, toEmail, toName, relation }) {
+  if (!RELATIONS[relation]) return { ok: false, error: "Unknown relationship" };
+  if (!fromId || fromId === toId) return { ok: false, error: "Invalid people" };
+  if (!toId && !toEmail) return { ok: false, error: "Invalid people" };
+  subjectId = subjectId || fromId;
+  if (subjectId === toId) {
+    return { ok: false, error: "A person cannot be related to themselves" };
+  }
+
+  let created = null;
+
+  const result = commit((s) => {
+    const from = s.persons[fromId];
+    const subject = s.persons[subjectId];
+    if (!from || !subject) return "Person no longer exists";
+
+    const to = toId ? s.persons[toId] : null;
+    if (toId && !to) return "Person no longer exists";
+
+    s.requests = s.requests || [];
+
+    const email = normEmail(toEmail || to?.email || "");
+
+    const dup = s.requests.some(
+      (r) =>
+        isLive(r) &&
+        r.fromId === fromId &&
+        (r.subjectId || r.fromId) === subjectId &&
+        r.relation === relation &&
+        (to ? r.toId === to.id : normEmail(r.toEmail) === email)
+    );
+    if (dup) return "Request already pending";
+
+    const spec = RELATIONS[relation];
+    let name;
+
+    if (to) {
+      name = to.name;
+
+      /* fail early: don't ask Linda to be a "Father" */
+      if (spec.gender && to.gender && to.gender !== spec.gender) {
+        return `${to.name} is recorded as ${
+          to.gender === "M" ? "male" : "female"
+        }, so cannot be ${subjectId === fromId ? "your" : subject.name + "'s"} ${relation}`;
+      }
+
+      /* "to is the <relation> of subject" */
+      const link =
+        spec.kind === "parent"
+          ? { type: "parent", a: to.id, b: subjectId }
+          : spec.kind === "child"
+          ? { type: "parent", a: subjectId, b: to.id }
+          : { type: spec.kind, a: subjectId, b: to.id };
+      if (s.relationships.some((r) => r.id === linkId(link.type, link.a, link.b))) {
+        return `${to.name} is already the ${relation} of ${subject.name}`;
+      }
+    } else {
+      /* not registered yet: we need a name to create them with */
+      name = cleanName(toName);
+      if (!name) {
+        return "That email is not registered yet. Enter their name too and we will email them an invite.";
+      }
+      if (findByName(s, name)) {
+        return `A member named ${name} already exists. Use a different name, or enter that person's registered email.`;
+      }
     }
 
-    const from = s.persons[req.fromId];
-    const to = s.persons[req.toId];
-    if (!from || !to) return "Person no longer exists";
-
-    /* "to is the <relation> of from" */
-    const err = applyRelative(s, {
-      personId: from.id,
-      relation: req.relation,
-      name: to.name,
-    });
-    if (err) return err;
-
-    req.status = "accepted";
+    created = {
+      id: `req_${crypto.randomUUID()}`,
+      token: crypto.randomBytes(24).toString("hex"),
+      fromId,
+      subjectId,
+      toId: to ? to.id : null,
+      toEmail: email,
+      toName: name,
+      relation,
+      status: "pending",
+      createdAt: Date.now(),
+      expiresAt: Date.now() + REQUEST_TTL_MS,
+    };
+    s.requests.push(created);
     return null;
+  });
+
+  return result.ok ? { ok: true, request: created } : result;
+}
+
+/* Used by BOTH the in-app Accept/Reject buttons and the emailed link.
+   Nothing touches the tree unless accepted. */
+function settleRequest(s, req, accept) {
+  if (!accept) {
+    req.status = "rejected";
+    return null;
+  }
+
+  /* who the relation is about (the sender unless stated otherwise) */
+  const subject = s.persons[req.subjectId || req.fromId];
+  if (!subject) return "Person no longer exists";
+
+  let to = req.toId ? s.persons[req.toId] : null;
+
+  if (!to) {
+    /* recipient only known by email: create them now */
+    to = findByEmail(s, req.toEmail); // may have registered meanwhile
+    if (!to) {
+      const name = cleanName(req.toName);
+      if (!name) return "Missing name";
+      if (findByName(s, name)) return `A member named ${name} already exists`;
+      const id = `user:${norm(name)}`;
+      to = s.persons[id] = {
+        id,
+        name,
+        email: normEmail(req.toEmail),
+        gender: null,
+      };
+    }
+    req.toId = to.id;
+  }
+
+  /* "to is the <relation> of subject" */
+  const err = applyRelative(s, {
+    personId: subject.id,
+    relation: req.relation,
+    name: to.name,
+  });
+  if (err) return err;
+
+  req.status = "accepted";
+  return null;
+}
+
+/* in-app popup: only the recipient can answer */
+function respondRequest({ requestId, accept, responderId }) {
+  return commit((s) => {
+    const req = (s.requests || []).find((r) => r.id === requestId && isLive(r));
+    if (!req) return "Request no longer exists or has expired";
+    if (!req.toId || req.toId !== responderId) return "Only the recipient can respond";
+    return settleRequest(s, req, accept);
+  });
+}
+
+/* emailed link: the secret token proves the inbox owner answered */
+function respondByToken({ token, accept }) {
+  return commit((s) => {
+    const req = (s.requests || []).find((r) => r.token === token && isLive(r));
+    if (!req) {
+      return "This request is no longer available (already answered, cancelled or expired)";
+    }
+    return settleRequest(s, req, accept);
   });
 }
 
 function cancelRequest({ requestId, fromId }) {
   return commit((s) => {
-    const req = (s.requests || []).find(
-      (r) => r.id === requestId && r.status === "pending"
-    );
+    const req = (s.requests || []).find((r) => r.id === requestId && isLive(r));
     if (!req) return "Request no longer exists";
     if (req.fromId !== fromId) return "You can only cancel your own requests";
     req.status = "cancelled";
     return null;
+  });
+}
+
+/* fire-and-forget: a mail problem must never break the request */
+function emailRequest(req) {
+  const from = state.persons[req.fromId];
+  if (!from || !req.toEmail) return;
+  sendRequestEmail({
+    to: req.toEmail,
+    toName: req.toName,
+    fromName: from.name,
+    fromEmail: from.email,
+    subjectName:
+      req.subjectId && req.subjectId !== req.fromId
+        ? state.persons[req.subjectId]?.name
+        : null,
+    relation: req.relation,
+    link: `${PUBLIC_URL}/request/${req.token}`,
+  }).catch((err) => console.error("✉️  email failed:", err.message));
+}
+
+/* ---------- HTTP routes for the emailed link ----------
+   GET  /request/:token          -> shows who is asking + buttons
+   POST /request/:token/accept   -> accepts
+   POST /request/:token/reject   -> rejects
+
+   The GET page never changes anything, so mail scanners that
+   "click" links can't accept a request by accident. */
+
+const TOKEN_RE = /^[a-f0-9]{48}$/;
+
+const page = (title, body) => `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)}</title>
+<style>
+  body{font-family:Arial,sans-serif;background:#f6f6f4;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}
+  .card{background:#fff;max-width:440px;margin:16px;padding:28px;border-radius:14px;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+  h2{margin-top:0} .row{display:flex;gap:10px;margin-top:20px}
+  button{flex:1;padding:12px;border:0;border-radius:8px;font-size:15px;cursor:pointer}
+  .ok{background:#111;color:#fff} .no{background:#e5e7eb}
+  .muted{color:#6b7280;font-size:13px}
+</style></head>
+<body><div class="card"><h2>${esc(title)}</h2>${body}</div></body></html>`;
+
+function registerTreeRoutes(app, io) {
+  const findLive = (token) =>
+    TOKEN_RE.test(token || "")
+      ? (state.requests || []).find((r) => r.token === token && isLive(r))
+      : null;
+
+  const gone = (res) =>
+    res
+      .status(404)
+      .send(
+        page(
+          "Link not available",
+          "<p>This request was already answered, cancelled or has expired.</p>"
+        )
+      );
+
+  app.get("/request/:token", (req, res) => {
+    const r = findLive(req.params.token);
+    if (!r) return gone(res);
+    const from = state.persons[r.fromId];
+    const t = r.token;
+    res.send(
+      page(
+        "Family connection request",
+        `<p><strong>${esc(from?.name || "Someone")}</strong>${
+          from?.email ? ` (${esc(from.email)})` : ""
+        } says you are ${
+          r.subjectId && r.subjectId !== r.fromId
+            ? `<strong>${esc(state.persons[r.subjectId]?.name || "someone")}</strong>'s`
+            : "their"
+        } <strong>${esc(r.relation)}</strong>.</p>
+         <p>Is this person your connection?</p>
+         <div class="row">
+           <form method="post" action="/request/${t}/accept" style="flex:1;display:flex"><button class="ok">Accept</button></form>
+           <form method="post" action="/request/${t}/reject" style="flex:1;display:flex"><button class="no">Reject</button></form>
+         </div>
+         <p class="muted">Nothing is added to the family tree unless you accept.</p>`
+      )
+    );
+  });
+
+  app.post("/request/:token/:action", (req, res) => {
+    const { token, action } = req.params;
+    if (!["accept", "reject"].includes(action)) return gone(res);
+    if (!findLive(token)) return gone(res);
+
+    const accept = action === "accept";
+    const result = respondByToken({ token, accept });
+
+    if (!result.ok) {
+      return res
+        .status(400)
+        .send(page("Could not complete", `<p>${esc(result.error)}</p>`));
+    }
+
+    io.emit("tree:state", snapshot()); // everyone's tree updates live
+
+    res.send(
+      accept
+        ? page(
+            "Connection added",
+            "<p>You are now connected. It will appear on both family trees.</p>"
+          )
+        : page("Request declined", "<p>Nothing was added to the family tree.</p>")
+    );
   });
 }
 
@@ -455,12 +694,7 @@ function registerTreeHandlers(io, socket) {
       io.emit("tree:state", snapshot());
 
       if (res.notifyTo && res.notifyPayload) {
-        console.log(
-          "📤 emitting tree:request to room",
-          res.notifyTo,
-          "payload:",
-          res.notifyPayload
-        );
+        console.log("📤 emitting tree:request to room", res.notifyTo);
         io.to(res.notifyTo).emit("tree:request", res.notifyPayload);
       }
     }
@@ -473,32 +707,60 @@ function registerTreeHandlers(io, socket) {
 
   socket.on("tree:addRelative", run(addRelative));
 
-  /* the sender is ALWAYS the socket's own identity, never the payload */
+  /* the sender is ALWAYS the socket's own identity, never the payload.
+     The recipient can be given by id OR by email. */
   socket.on(
     "tree:sendRequest",
     run((payload) => {
       if (!myId) return { ok: false, error: "Not signed in" };
       console.log("📥 tree:sendRequest received:", payload);
 
-      const clean = { toId: payload.toId, relation: payload.relation, fromId: myId };
+      let toId = payload.toId || null;
+      const toEmail = payload.toEmail ? normEmail(payload.toEmail) : "";
 
-      const result = createRequest(clean);
+      if (!toId && toEmail) {
+        if (!isEmail(toEmail)) {
+          return { ok: false, error: "Please enter a valid email address" };
+        }
+        const target = findByEmail(state, toEmail);
+        if (target) toId = target.id;
+      }
+
+      if (!toId && !toEmail) {
+        return { ok: false, error: "Please enter the person's email" };
+      }
+      if (toId === myId) {
+        return { ok: false, error: "You can't send a request to yourself" };
+      }
+      const me = state.persons[myId];
+      if (toEmail && me?.email && normEmail(me.email) === toEmail) {
+        return { ok: false, error: "That is your own email" };
+      }
+
+      const result = createRequest({
+        fromId: myId,
+        subjectId: payload.subjectId || myId,
+        toId,
+        toEmail,
+        toName: payload.toName,
+        relation: payload.relation,
+      });
       if (!result.ok) return result;
 
-      const req = state.requests.find(
-        (r) =>
-          r.status === "pending" &&
-          r.fromId === clean.fromId &&
-          r.toId === clean.toId &&
-          r.relation === clean.relation
-      );
+      const req = result.request;
+      emailRequest(req);
 
       return {
         ok: true,
-        notifyTo: clean.toId,
+        notifyTo: req.toId || undefined, // live popup only if they have an account
         notifyPayload: {
-          ...req,
-          fromName: state.persons[clean.fromId]?.name,
+          ...publicRequest(req),
+          fromName: state.persons[myId]?.name,
+          fromEmail: state.persons[myId]?.email,
+          subjectName:
+            req.subjectId && req.subjectId !== myId
+              ? state.persons[req.subjectId]?.name
+              : null,
         },
       };
     })
@@ -520,10 +782,18 @@ function registerTreeHandlers(io, socket) {
     })
   );
 
+  socket.on(
+    "tree:setEmail",
+    run((payload) => {
+      if (!myId) return { ok: false, error: "Not signed in" };
+      return setEmail({ personId: myId, email: payload.email });
+    })
+  );
+
   socket.on("tree:removeRelation", run(removeRelation));
   socket.on("tree:setGender", run(setGender));
 
   socket.emit("tree:state", snapshot());
 }
 
-module.exports = { registerTreeHandlers };
+module.exports = { registerTreeHandlers, registerTreeRoutes };

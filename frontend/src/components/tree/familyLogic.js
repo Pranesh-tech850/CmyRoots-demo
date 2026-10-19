@@ -6,6 +6,9 @@
      - buildGraph : fast lookups (parents / children / spouses / siblings)
      - getLabel   : "Father", "Son", "Wife"... relative to the viewer
      - layoutTree : generation rows -> x/y positions
+                    + empty "Add person" cards (slots)
+                      for you AND for your parents' missing parents
+                      (Grandfather / Grandmother)
 ========================================================= */
 
 export const relationshipTemplates = [
@@ -18,7 +21,15 @@ export const relationshipTemplates = [
   { value: "Spouse", label: "Spouse", hint: "Partner" },
   { value: "Son", label: "Son", hint: "Child" },
   { value: "Daughter", label: "Daughter", hint: "Child" },
+  { value: "Grandfather", label: "Grandfather", hint: "Grandparent" },
+  { value: "Grandmother", label: "Grandmother", hint: "Grandparent" },
 ];
+
+/* The server only knows direct relations. A grandparent is added as the
+   Father / Mother of one of the person's PARENTS, so the UI converts:
+     Grandfather of X  ->  Father of (a parent of X)
+     Grandmother of X  ->  Mother of (a parent of X)                    */
+export const GRAND = { Grandfather: "Father", Grandmother: "Mother" };
 
 export const normName = (n) => String(n || "").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -134,6 +145,71 @@ export function getLabel(g, viewerId, id) {
 }
 
 /* =========================================================
+   GRANDPARENT SLOTS
+
+   For every parent of the focus person that is missing a father
+   and/or a mother, we add an invisible "virtual person" to a
+   COPY of the graph. The layout then treats it like any other
+   person (so spacing and centring are handled for us), and at
+   the end it is turned into an empty "Add person" card.
+
+   Clicking such a card means:
+     "add a <Father|Mother> to <that parent>"
+========================================================= */
+
+const unionSet = (a, b) => {
+  if (!b || !b.size) return a;
+  const out = new Set(a);
+  b.forEach((v) => out.add(v));
+  return out;
+};
+
+function withGrandparentSlots(g, focusId) {
+  const byId = { ...g.byId };
+  const extraParents = {};
+  const extraChildren = {};
+  const extraSpouses = {};
+  const put = (map, k, v) => (map[k] = map[k] || new Set()).add(v);
+
+  [...g.parents(focusId)]
+    .filter((p) => g.byId[p])
+    .forEach((p) => {
+      const grandparents = [...g.parents(p)].filter((id) => g.byId[id]);
+      const hasFather = grandparents.some((id) => g.byId[id].gender === "M");
+      const hasMother = grandparents.some((id) => g.byId[id].gender === "F");
+
+      const make = (relation, gender, label) => {
+        const vid = `__slot:${p}:${relation}`;
+        byId[vid] = { id: vid, name: "", gender, __slot: { slotOf: p, relation, label } };
+        put(extraParents, p, vid);
+        put(extraChildren, vid, p);
+        return vid;
+      };
+
+      const virtuals = [];
+      if (!hasFather) virtuals.push(make("Father", "M", "Grandfather"));
+      if (!hasMother) virtuals.push(make("Mother", "F", "Grandmother"));
+
+      /* keep the two grandparents side by side as a couple */
+      if (virtuals.length === 2) {
+        put(extraSpouses, virtuals[0], virtuals[1]);
+        put(extraSpouses, virtuals[1], virtuals[0]);
+      } else if (virtuals.length === 1 && grandparents.length) {
+        put(extraSpouses, virtuals[0], grandparents[0]);
+        put(extraSpouses, grandparents[0], virtuals[0]);
+      }
+    });
+
+  return {
+    byId,
+    parents: (id) => unionSet(g.parents(id), extraParents[id]),
+    children: (id) => unionSet(g.children(id), extraChildren[id]),
+    spouses: (id) => unionSet(g.spouses(id), extraSpouses[id]),
+    siblings: (id) => g.siblings(id),
+  };
+}
+
+/* =========================================================
    LAYOUT
 
    1. Generation of everyone connected to the viewer
@@ -142,12 +218,21 @@ export function getLabel(g, viewerId, id) {
       their spouse(s), kept side by side). Units that share the
       same parents form a cluster centred under those parents.
    3. Overlaps are resolved left to right.
+
+   Returns:
+     positions     { personId: {x, y} }
+     placeholders  [ { relation,      <- label shown on the card
+                       slotRelation,  <- relation sent to the server
+                       slotOf,        <- person the new relative is added to
+                       position } ]
 ========================================================= */
 
 export const GAP_X = 220;
 export const GAP_Y = 190;
 
-export function layoutTree(g, focusId) {
+export function layoutTree(realGraph, focusId) {
+  const g = withGrandparentSlots(realGraph, focusId);
+
   /* ---- 1. generations ---- */
   const gen = { [focusId]: 0 };
   const queue = [focusId];
@@ -241,7 +326,12 @@ export function layoutTree(g, focusId) {
   const fx = x[focusId];
   const placeholders = [];
   const slot = (relation, px, L) =>
-    placeholders.push({ relation, position: { x: px, y: L * GAP_Y } });
+    placeholders.push({
+      relation,
+      slotRelation: relation,
+      slotOf: focusId,
+      position: { x: px, y: L * GAP_Y },
+    });
 
   const up = rowStats(-1);
   if (!hasGender(g.parents(focusId), "M")) slot("Father", up ? up.min - GAP_X : fx - GAP_X / 2, -1);
@@ -266,9 +356,21 @@ export function layoutTree(g, focusId) {
   if (!hasGender(g.children(focusId), "M")) slot("Son", down ? down.min - GAP_X : coupleMid - GAP_X / 2, 1);
   if (!hasGender(g.children(focusId), "F")) slot("Daughter", down ? down.max + GAP_X : coupleMid + GAP_X / 2, 1);
 
+  /* ---- 4. real people -> positions, virtual people -> grandparent cards ---- */
   const positions = {};
   Object.keys(gen).forEach((id) => {
-    positions[id] = { x: x[id], y: gen[id] * GAP_Y };
+    const pos = { x: x[id], y: gen[id] * GAP_Y };
+    const v = g.byId[id]?.__slot;
+    if (v) {
+      placeholders.push({
+        relation: v.label, // shown on the card: "Grandfather"
+        slotRelation: v.relation, // sent to the server: "Father" (of slotOf)
+        slotOf: v.slotOf,
+        position: pos,
+      });
+    } else {
+      positions[id] = pos;
+    }
   });
 
   return { positions, placeholders };

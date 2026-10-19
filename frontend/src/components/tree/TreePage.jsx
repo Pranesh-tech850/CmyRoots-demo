@@ -9,7 +9,7 @@ import "../../styles/TreePage.css";
 import FamilyNode from "./FamilyNode";
 import AddRelativeModal from "./AddRelativeModal";
 import ProfileModal from "./ProfileModal";
-import { buildGraph, getLabel, layoutTree, normName } from "./familyLogic";
+import { buildGraph, getLabel, layoutTree, normName, GRAND } from "./familyLogic";
 
 const nodeTypes = { familyNode: FamilyNode };
 const edgeStyle = { stroke: "#9ca3af", strokeWidth: 1.5 };
@@ -41,6 +41,7 @@ const TreePage = ({ socket, currentUser }) => {
   const [showAddRelative, setShowAddRelative] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [relativeName, setRelativeName] = useState("");
+  const [relativeEmail, setRelativeEmail] = useState("");
   const [selectedRelation, setSelectedRelation] = useState("Father");
   const [modalStep, setModalStep] = useState("relation");
   const [modalMode, setModalMode] = useState("propose");
@@ -55,6 +56,19 @@ const TreePage = ({ socket, currentUser }) => {
   );
 
   const activeId = graph.byId[selectedPersonId] ? selectedPersonId : viewerId;
+
+  /* grandparents: which parent are they the parent of? */
+  const [viaParentId, setViaParentId] = useState("");
+  const modalSubjectId = modalMode === "propose" ? viewerId : activeId;
+  const parentOptions = useMemo(
+    () =>
+      modalSubjectId
+        ? [...graph.parents(modalSubjectId)]
+            .filter((id) => graph.byId[id])
+            .map((id) => ({ id, name: graph.byId[id].name }))
+        : [],
+    [graph, modalSubjectId]
+  );
 
   const { nodes, edges } = useMemo(() => {
     if (!viewerId) return { nodes: [], edges: [] };
@@ -74,7 +88,7 @@ const TreePage = ({ socket, currentUser }) => {
     }));
 
     const slotNodes = placeholders.map((slot) => ({
-      id: `slot-${slot.relation.toLowerCase()}`,
+      id: `slot-${slot.slotOf}-${slot.slotRelation}`,
       type: "familyNode",
       position: slot.position,
       data: {
@@ -82,7 +96,8 @@ const TreePage = ({ socket, currentUser }) => {
         relation: slot.relation,
         isMe: false,
         isEmpty: true,
-        slotOf: viewerId,
+        slotOf: slot.slotOf || viewerId,
+        slotRelation: slot.slotRelation || slot.relation,
       },
     }));
 
@@ -125,13 +140,21 @@ const TreePage = ({ socket, currentUser }) => {
   const handleNodeClick = (_event, node) => {
     if (node.data.isEmpty) {
       setSelectedPersonId(node.data.slotOf);
-      setSelectedRelation(node.data.relation);
+      setSelectedRelation(node.data.slotRelation || node.data.relation);
       setModalMode("direct");
       setModalStep("details");
       setShowAddRelative(true);
       return;
     }
     setSelectedPersonId(node.id);
+  };
+
+  /* add a relative to whoever is selected (e.g. select Dad -> add his Father) */
+  const openAddToSelected = () => {
+    if (!activeId) return;
+    setModalMode("direct");
+    setModalStep("details");
+    setShowAddRelative(true);
   };
 
   const openAddRelative = () => {
@@ -147,8 +170,34 @@ const TreePage = ({ socket, currentUser }) => {
 
   const closeAddModal = () => {
     setRelativeName("");
+    setRelativeEmail("");
+    setViaParentId("");
     setSelectedRelation("Father");
     setShowAddRelative(false);
+  };
+
+  /* "your" / "Robert's" for the confirmation messages */
+  const whose = (id) =>
+    id === viewerId ? "your" : `${graph.byId[id]?.name || "their"}'s`;
+
+  /* Grandfather/Grandmother -> Father/Mother of one of the subject's parents.
+     Everything else is sent unchanged. */
+  const resolveRelation = (subjectId) => {
+    const up = GRAND[selectedRelation];
+    if (!up) return { relation: selectedRelation, subjectId };
+
+    if (!parentOptions.length) {
+      return {
+        error:
+          subjectId === viewerId
+            ? "You have no parents on the tree yet. Add a father or mother first, then add the grandparent."
+            : `${graph.byId[subjectId]?.name || "They"} has no parents on the tree yet. To add their father or mother, choose Father or Mother. To add YOUR grandparent, click your own card first.`,
+      };
+    }
+    const via = parentOptions.some((p) => p.id === viaParentId)
+      ? viaParentId
+      : parentOptions[0].id;
+    return { relation: up, subjectId: via };
   };
 
   const handleModalSubmit = () => {
@@ -157,12 +206,47 @@ const TreePage = ({ socket, currentUser }) => {
       return;
     }
 
-    /* ---- slot card: name typed in the box ---- */
-    if (modalMode === "direct") {
-      if (!relativeName.trim()) return alert("Please enter family member name");
+    const isDirect = modalMode === "direct";
+    /* the person the new relative belongs to */
+    const owner = isDirect ? activeId : viewerId;
+    const target = resolveRelation(owner);
+    if (target.error) return alert(target.error);
 
-      /* the name belongs to a registered user -> needs THEIR approval,
-         so send a request: "<that user> is my <relation>" */
+    if (isDirect) {
+      /* ---- email given: look the person up and send a request ---- */
+      if (relativeEmail.trim()) {
+        const email = relativeEmail.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          return alert("Please enter a valid email address");
+        }
+        const me = snapshot.persons.find((p) => p.id === viewerId);
+        if (me?.email && me.email.toLowerCase() === email) {
+          return alert("That is your own email.");
+        }
+        socket.emit(
+          "tree:sendRequest",
+          {
+            subjectId: target.subjectId,
+            toEmail: email,
+            toName: relativeName.trim() || undefined,
+            relation: target.relation,
+          },
+          (res) => {
+            if (!res?.ok) return alert(res?.error || "Could not send request");
+            alert(
+              `Request emailed to ${email}: you asked them to be ${whose(owner)} ${selectedRelation}. It only appears on the tree after they accept.`
+            );
+            closeAddModal();
+          }
+        );
+        return;
+      }
+
+      if (!relativeName.trim()) {
+        return alert("Please enter an email or a family member name");
+      }
+
+      /* the name belongs to a registered user -> needs THEIR approval */
       const registered = snapshot.persons.find(
         (p) => p.id.startsWith("user:") && normName(p.name) === normName(relativeName)
       );
@@ -170,13 +254,16 @@ const TreePage = ({ socket, currentUser }) => {
         if (registered.id === viewerId) {
           return alert("You can't send a request to yourself.");
         }
+        if (registered.id === target.subjectId) {
+          return alert("A person can't be related to themselves.");
+        }
         socket.emit(
           "tree:sendRequest",
-          { toId: registered.id, relation: selectedRelation },
+          { subjectId: target.subjectId, toId: registered.id, relation: target.relation },
           (res) => {
             if (!res?.ok) return alert(res?.error || "Could not send request");
             alert(
-              `Request sent: you asked ${registered.name} to be your ${selectedRelation}. Waiting for them to accept.`
+              `Request sent: you asked ${registered.name} to be ${whose(owner)} ${selectedRelation}. Waiting for them to accept.`
             );
             closeAddModal();
           }
@@ -187,7 +274,7 @@ const TreePage = ({ socket, currentUser }) => {
       /* no account -> add directly, no approval needed */
       socket.emit(
         "tree:addRelative",
-        { personId: activeId, relation: selectedRelation, name: relativeName.trim() },
+        { personId: target.subjectId, relation: target.relation, name: relativeName.trim() },
         (res) => {
           if (!res?.ok) return alert(res?.error || "Could not add relative");
           closeAddModal();
@@ -205,7 +292,7 @@ const TreePage = ({ socket, currentUser }) => {
     /* the server fills in fromId from the socket identity */
     socket.emit(
       "tree:sendRequest",
-      { toId: activeId, relation: selectedRelation },
+      { subjectId: target.subjectId, toId: activeId, relation: target.relation },
       (res) => {
         if (!res?.ok) return alert(res?.error || "Could not send request");
         alert(
@@ -247,6 +334,16 @@ const TreePage = ({ socket, currentUser }) => {
           >
             <UserPlus size={18} />
             <span>Add Relation</span>
+          </button>
+
+          <button
+            className="tree-action-btn"
+            onClick={openAddToSelected}
+            disabled={!viewerId || !activeId}
+            title="Add a father, mother, spouse, child... to the selected person"
+          >
+            <UserPlus size={18} />
+            <span>Add Relative</span>
           </button>
 
           <button
@@ -302,9 +399,18 @@ const TreePage = ({ socket, currentUser }) => {
         <AddRelativeModal
           initialStep={modalStep}
           mode={modalMode}
-          selectedPersonName={activeNode?.data?.name}
+          selectedPersonName={
+            modalMode === "direct" && activeId === viewerId
+              ? undefined
+              : activeNode?.data?.name
+          }
           relativeName={relativeName}
           setRelativeName={setRelativeName}
+          relativeEmail={relativeEmail}
+          setRelativeEmail={setRelativeEmail}
+          parentOptions={parentOptions}
+          viaParentId={viaParentId}
+          setViaParentId={setViaParentId}
           selectedRelation={selectedRelation}
           setSelectedRelation={setSelectedRelation}
           onAdd={handleModalSubmit}

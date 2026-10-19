@@ -1,13 +1,18 @@
 // server/server.js
-// Setup:  npm init -y && npm i express socket.io cors
+// Setup:  npm init -y && npm i express socket.io cors nodemailer dotenv pg
 // Run:    node server.js
+require("dotenv").config(); // loads server/.env (DATABASE_URL, SMTP settings, PUBLIC_URL)
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
 
-// Family tree: relationship logic, persistence, real-time sync
-const { registerTreeHandlers } = require("./familyTree");
+// Family tree: relationship logic, persistence, real-time sync, email links
+const { registerTreeHandlers, registerTreeRoutes } = require("./familyTree");
+
+// Chat messages are stored in PostgreSQL (database: chat_app)
+const { initDb, getHistory, saveMessage, deleteMessage } = require("./db");
 
 const app = express();
 app.use(cors());
@@ -25,30 +30,9 @@ const io = new Server(server, {
   },
 });
 
-// In-memory store (replace with MongoDB/Postgres later)
-const messages = [
-  {
-    id: "m-1",
-    from: "Linda",
-    to: "Sarah",
-    text: "Don't forget family dinner this Sunday!",
-    time: new Date(Date.now() - 3600000 * 3).toISOString(),
-  },
-  {
-    id: "m-2",
-    from: "Robert",
-    to: "Sarah",
-    text: "I uploaded the Easter photos.",
-    time: new Date(Date.now() - 3600000 * 24).toISOString(),
-  },
-  {
-    id: "m-3",
-    from: "Mike",
-    to: "Sarah",
-    text: "Can you check the family tree?",
-    time: new Date(Date.now() - 3600000 * 20).toISOString(),
-  },
-];
+// Pages opened from the request email: /request/:token (+ accept / reject)
+registerTreeRoutes(app, io);
+
 const onlineCount = {}; // username -> number of open tabs/sockets
 
 const broadcastPresence = () => {
@@ -71,33 +55,61 @@ io.on("connection", (socket) => {
   onlineCount[username] = (onlineCount[username] || 0) + 1;
   broadcastPresence();
 
-  // Family tree events: tree:get, tree:addRelative, tree:removeRelation, tree:setGender
+  // Family tree events: tree:get, tree:addRelative, tree:sendRequest,
+  // tree:respondRequest, tree:cancelRequest, tree:setEmail, ...
   registerTreeHandlers(io, socket);
 
-  // Send this user their past conversations
-  socket.emit(
-    "history",
-    messages.filter((m) => m.from === username || m.to === username)
-  );
+  // Send this user their past conversations (loaded from PostgreSQL)
+  getHistory(username)
+    .then((history) => socket.emit("history", history))
+    .catch((err) => {
+      console.error("🐘 could not load chat history:", err.message);
+      socket.emit("history", []);
+    });
 
-  // Send a message
-  socket.on("message:send", ({ to, text }, ack) => {
-    if (!to || !text || !text.trim()) return;
+  // Send a message: save it in PostgreSQL first, then deliver it
+  socket.on("message:send", async ({ to, text } = {}, ack) => {
+    const clean = String(text || "").trim().slice(0, 2000);
+    if (!to || !clean) {
+      if (typeof ack === "function") ack({ ok: false, error: "Empty message" });
+      return;
+    }
 
-    const message = {
-      id: Date.now() + "-" + Math.random().toString(36).slice(2, 8),
-      from: username,
-      to,
-      text: text.trim(),
-      time: new Date().toISOString(),
-    };
+    try {
+      const message = await saveMessage({ from: username, to, text: clean });
 
-    messages.push(message);
+      // deliver to receiver AND sender (so sender's other tabs update too)
+      io.to(`user:${to}`).to(`user:${username}`).emit("message:new", message);
 
-    // deliver to receiver AND sender (so sender's other tabs update too)
-    io.to(`user:${to}`).to(`user:${username}`).emit("message:new", message);
+      if (typeof ack === "function") ack({ ok: true });
+    } catch (err) {
+      console.error("🐘 could not save message:", err.message);
+      if (typeof ack === "function") ack({ ok: false, error: "Could not save message" });
+    }
+  });
 
-    if (typeof ack === "function") ack({ ok: true });
+  // Delete one of MY messages: remove it from PostgreSQL, then tell both people
+  socket.on("message:delete", async ({ id } = {}, ack) => {
+    try {
+      const deleted = await deleteMessage({ id, username });
+
+      if (!deleted) {
+        if (typeof ack === "function") {
+          ack({ ok: false, error: "Message not found, or it is not yours" });
+        }
+        return;
+      }
+
+      // both users (in all their tabs) remove it from the screen
+      io.to(`user:${deleted.to}`)
+        .to(`user:${username}`)
+        .emit("message:deleted", { id: deleted.id });
+
+      if (typeof ack === "function") ack({ ok: true });
+    } catch (err) {
+      console.error("🐘 could not delete message:", err.message);
+      if (typeof ack === "function") ack({ ok: false, error: "Could not delete message" });
+    }
   });
 
   // Typing indicator
@@ -113,4 +125,17 @@ io.on("connection", (socket) => {
 });
 
 const PORT = 4000;
-server.listen(PORT, () => console.log(`Socket server running on :${PORT}`));
+
+// Connect to PostgreSQL first, then start accepting connections
+initDb()
+  .then(() =>
+    server.listen(PORT, () => console.log(`Socket server running on :${PORT}`))
+  )
+  .catch((err) => {
+    console.error(
+      "❌ Could not connect to PostgreSQL (database chat_app):",
+      err.message,
+      "\n   Check DATABASE_URL in server/.env and that PostgreSQL is running."
+    );
+    process.exit(1);
+  });
