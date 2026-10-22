@@ -78,6 +78,25 @@ export function buildGraph({ persons = [], relationships = [] } = {}) {
   };
 }
 
+/* everyone linked to `startId` through ANY chain of relatives
+   (used to tell "in my family tree" apart from "just a member of the app") */
+export function connectedIds(g, startId) {
+  const seen = new Set([startId]);
+  const queue = [startId];
+  while (queue.length) {
+    const id = queue.shift();
+    [...g.parents(id), ...g.children(id), ...g.spouses(id), ...g.siblings(id)].forEach(
+      (n) => {
+        if (!seen.has(n)) {
+          seen.add(n);
+          queue.push(n);
+        }
+      }
+    );
+  }
+  return seen;
+}
+
 /* =========================================================
    LABELS (derived, never stored)
 ========================================================= */

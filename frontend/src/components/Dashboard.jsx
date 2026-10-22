@@ -20,27 +20,65 @@ import {
   User,
   Save,
   Trash2,
+  Smile,
+  Image as ImageIcon,
+  X,
 } from "lucide-react";
 
 import "../styles/Dashboard.css";
 
 import TreePage from "./tree/TreePage";
-import { buildGraph, getLabel, normName } from "./tree/familyLogic";
+import { buildGraph, getLabel, normName, connectedIds } from "./tree/familyLogic";
 
 /* ⚠️ MUST match your server's listen() port */
 const SOCKET_URL = "http://localhost:4000";
 
+/* chat: emojis for the picker, image limit, and group keys.
+   A group chat is selected with the key "g:<id>", a person with their name. */
+const EMOJIS = (
+  "😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😎 🤩 🥳 😏 " +
+  "😢 😭 😤 😡 🥺 😱 😴 🤔 🙄 😬 🤗 🤭 🤫 😷 🤒 🥶 🥵 🤯 😐 😮 " +
+  "👍 👎 👏 🙌 🙏 💪 👋 🤝 ✌️ 🤞 👌 🤙 👀 🫶 " +
+  "❤️ 🧡 💛 💚 💙 💜 🖤 💔 💕 💖 " +
+  "🎉 🎊 🎁 🎂 🔥 ✨ ⭐ 🌟 💯 ✅ ❌ 🏠 👨‍👩‍👧‍👦 🌳 🌸 🍕 🍔 🍰 ☕ 🎵 📷 ✈️ 🚗 🌞 🌙"
+).split(" ");
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const isGroupKey = (k) => typeof k === "string" && k.startsWith("g:");
+
+/* shown until the real list arrives from the server (and quick-switch users) */
+const DEFAULT_MEMBERS = [
+  { name: "Sarah",  email: "sarah@example.com",  avatar: "👩🏻" },
+  { name: "Robert", email: "robert@example.com", avatar: "👨🏻" },
+  { name: "Linda",  email: "linda@example.com",  avatar: "👩🏻" },
+  { name: "Mike",   email: "mike@example.com",   avatar: "👦🏻" },
+];
+const QUICK_USERS = DEFAULT_MEMBERS.map((m) => m.name);
+
+/* relations before the tree has loaded */
+const DEFAULT_RELATIONS = {
+  Sarah:  { Robert: "Father", Linda: "Mother", Mike: "Brother" },
+  Robert: { Sarah: "Daughter", Linda: "Wife",  Mike: "Son" },
+  Linda:  { Sarah: "Daughter", Robert: "Husband", Mike: "Son" },
+  Mike:   { Sarah: "Sister", Robert: "Father", Linda: "Mother" },
+};
+
 const Dashboard = () => {
-  /* ---------- members ---------- */
-  const members = useMemo(
-    () => [
-      { name: "Sarah",  relation: "You",    email: "sarah@example.com",  status: "Active", avatar: "👩🏻" },
-      { name: "Robert", relation: "Father", email: "robert@example.com", status: "Active", avatar: "👨🏻" },
-      { name: "Linda",  relation: "Mother", email: "linda@example.com",  status: "Active", avatar: "👩🏻" },
-      { name: "Mike",   relation: "Brother",email: "mike@example.com",   status: "Active", avatar: "👦🏻" },
-    ],
-    []
-  );
+  /* ---------- members (loaded from PostgreSQL through the server) ---------- */
+  const [members, setMembers] = useState(DEFAULT_MEMBERS);
+
+  useEffect(() => {
+    fetch(`${SOCKET_URL}/api/members`)
+      .then((r) => r.json())
+      .then((list) => {
+        if (Array.isArray(list) && list.length) setMembers(list);
+      })
+      .catch(() => {}); // keep the default list if the server is not reachable
+  }, []);
+
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [contactSearch, setContactSearch] = useState("");
+  const [memberLimit, setMemberLimit] = useState(25);
 
   /* ---------- current user ---------- */
   const getInitialUser = () => {
@@ -83,16 +121,76 @@ const Dashboard = () => {
   const [activePage, setActivePage] = useState("dashboard");
 
   const [chatMessages, setChatMessages] = useState([]);
+  const [groups, setGroups] = useState([]); // group chats I belong to
   const [selectedContact, setSelectedContact] = useState(
     () => contacts[0] || "Robert"
   );
-  const activeContact = contacts.includes(selectedContact)
+  /* a person's name, or "g:<id>" for a group */
+  const activeContact = isGroupKey(selectedContact)
+    ? groups.some((g) => `g:${g.id}` === selectedContact)
+      ? selectedContact
+      : contacts[0] || ""
+    : contacts.includes(selectedContact)
     ? selectedContact
     : contacts[0] || "";
+  const activeGroup = isGroupKey(activeContact)
+    ? groups.find((g) => `g:${g.id}` === activeContact)
+    : null;
   const [chatText, setChatText] = useState("");
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [typingFrom, setTypingFrom] = useState({});
   const [unread, setUnread] = useState({});
+
+  /* emoji picker, image attachment, group creation */
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [pendingImage, setPendingImage] = useState(null); // { file, previewUrl }
+  const [sending, setSending] = useState(false);
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupPick, setGroupPick] = useState([]);
+  const [groupSearch, setGroupSearch] = useState("");
+
+  /* chat list for many members: unread first, then most recent chat,
+     then online, then A-Z; filtered by the search box */
+  const lastTalk = useMemo(() => {
+    const t = {};
+    chatMessages.forEach((m) => {
+      const other = m.groupId
+        ? `g:${m.groupId}`
+        : m.from === currentUser
+        ? m.to
+        : m.from;
+      const ts = Date.parse(m.time) || 0;
+      if (ts > (t[other] || 0)) t[other] = ts;
+    });
+    return t;
+  }, [chatMessages, currentUser]);
+
+  /* my groups, same order rules as people: unread, recent, A-Z */
+  const visibleGroups = useMemo(() => {
+    const q = contactSearch.trim().toLowerCase();
+    return groups
+      .filter((g) => g.name.toLowerCase().includes(q))
+      .sort(
+        (a, b) =>
+          (unread[`g:${b.id}`] || 0) - (unread[`g:${a.id}`] || 0) ||
+          (lastTalk[`g:${b.id}`] || 0) - (lastTalk[`g:${a.id}`] || 0) ||
+          a.name.localeCompare(b.name)
+      );
+  }, [groups, contactSearch, unread, lastTalk]);
+
+  const visibleContacts = useMemo(() => {
+    const q = contactSearch.trim().toLowerCase();
+    return contacts
+      .filter((name) => name.toLowerCase().includes(q))
+      .sort(
+        (a, b) =>
+          (unread[b] || 0) - (unread[a] || 0) ||
+          (lastTalk[b] || 0) - (lastTalk[a] || 0) ||
+          Number(onlineUsers.includes(b)) - Number(onlineUsers.includes(a)) ||
+          a.localeCompare(b)
+      );
+  }, [contacts, contactSearch, unread, lastTalk, onlineUsers]);
 
   const [treeSocket, setTreeSocket] = useState(null);
   const [treeSnapshot, setTreeSnapshot] = useState(null);
@@ -103,6 +201,8 @@ const Dashboard = () => {
 
   const socketRef = useRef(null);
   const bottomRef = useRef(null);
+  const chatInputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const typingTimeout = useRef(null);
   const activeContactRef = useRef(activeContact);
   const activePageRef = useRef(activePage);
@@ -160,13 +260,34 @@ const Dashboard = () => {
       setChatMessages((prev) => [...prev, msg]);
       setTypingFrom((t) => ({ ...t, [msg.from]: false }));
 
+      /* which chat does this belong to: a group, or the person who wrote it */
+      const chatKey = msg.groupId ? `g:${msg.groupId}` : msg.from;
+
       const chatIsOpen =
         activePageRef.current === "messages" &&
-        activeContactRef.current === msg.from;
+        activeContactRef.current === chatKey;
 
       if (msg.from !== currentUser && !chatIsOpen) {
-        setUnread((u) => ({ ...u, [msg.from]: (u[msg.from] || 0) + 1 }));
+        setUnread((u) => ({ ...u, [chatKey]: (u[chatKey] || 0) + 1 }));
       }
+    });
+
+    /* ---- group chats ---- */
+    socket.on("groups", (list) => setGroups(list));
+    socket.on("group:new", (g) =>
+      setGroups((prev) => (prev.some((x) => x.id === g.id) ? prev : [...prev, g]))
+    );
+    socket.on("group:updated", (g) =>
+      setGroups((prev) => prev.map((x) => (x.id === g.id ? g : x)))
+    );
+    socket.on("group:left", ({ groupId }) => {
+      setGroups((prev) => prev.filter((x) => x.id !== groupId));
+      setChatMessages((prev) => prev.filter((m) => m.groupId !== groupId));
+      setUnread((u) => {
+        const rest = { ...u };
+        delete rest[`g:${groupId}`];
+        return rest;
+      });
     });
 
     /* a message was deleted (by me or by the other person's delete of their own) */
@@ -280,39 +401,47 @@ const Dashboard = () => {
     });
   };
 
+  /* ---------- who is in MY family tree ---------- */
+  const myPersonId = `user:${normName(currentUser)}`;
+
+  const treeGraph = useMemo(
+    () => (treeSnapshot ? buildGraph(treeSnapshot) : null),
+    [treeSnapshot]
+  );
+
+  /* ids of everyone linked to me by any chain of relatives */
+  const connected = useMemo(
+    () =>
+      treeGraph && treeGraph.byId[myPersonId]
+        ? connectedIds(treeGraph, myPersonId)
+        : null,
+    [treeGraph, myPersonId]
+  );
+
   /* ---------- dynamic relation helper ---------- */
   const getMemberRelation = (memberName) => {
     if (memberName === currentUser) return "You";
 
-    if (treeSnapshot && treeSnapshot.persons && treeSnapshot.relationships) {
-      const g = buildGraph(treeSnapshot);
-      const vId = treeSnapshot.persons.find(
-        (p) => normName(p.name) === normName(currentUser)
-      )?.id;
-      const mId = treeSnapshot.persons.find(
-        (p) => normName(p.name) === normName(memberName)
-      )?.id;
-      if (vId && mId) return getLabel(g, vId, mId);
+    if (treeGraph && connected) {
+      const mId = `user:${normName(memberName)}`;
+      if (!connected.has(mId)) return "Not connected";
+      return getLabel(treeGraph, myPersonId, mId);
     }
 
-    const defaultRelations = {
-      Sarah:  { Robert: "Father", Linda: "Mother", Mike: "Brother" },
-      Robert: { Sarah: "Daughter", Linda: "Wife",  Mike: "Son" },
-      Linda:  { Sarah: "Daughter", Robert: "Husband", Mike: "Son" },
-      Mike:   { Sarah: "Sister", Robert: "Father", Linda: "Mother" },
-    };
-    return defaultRelations[currentUser]?.[memberName] || "Relative";
+    return DEFAULT_RELATIONS[currentUser]?.[memberName] || "Not connected";
   };
 
   /* ---------- chat ---------- */
   const conversation = useMemo(
     () =>
-      chatMessages.filter(
-        (m) =>
-          (m.from === currentUser && m.to === activeContact) ||
-          (m.from === activeContact && m.to === currentUser)
+      chatMessages.filter((m) =>
+        activeGroup
+          ? m.groupId === activeGroup.id
+          : !m.groupId &&
+            ((m.from === currentUser && m.to === activeContact) ||
+              (m.from === activeContact && m.to === currentUser))
       ),
-    [chatMessages, activeContact, currentUser]
+    [chatMessages, activeContact, activeGroup, currentUser]
   );
 
   useEffect(() => {
@@ -321,9 +450,20 @@ const Dashboard = () => {
 
   const totalUnread = Object.values(unread).reduce((a, b) => a + b, 0);
 
+  const clearPendingImage = () => {
+    setPendingImage((prev) => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl);
+      return null;
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  /* name = a person's name, or "g:<id>" for a group */
   const openChat = (name) => {
     setSelectedContact(name);
     setUnread((u) => ({ ...u, [name]: 0 }));
+    setShowEmoji(false);
+    clearPendingImage(); // never send a picked image to a different chat by mistake
   };
 
   const handleNavigate = (page) => {
@@ -336,7 +476,7 @@ const Dashboard = () => {
   const handleChatInput = (e) => {
     setChatText(e.target.value);
     const socket = socketRef.current;
-    if (!socket || !activeContact) return;
+    if (!socket || !activeContact || activeGroup) return; // no typing signal in groups
 
     socket.emit("typing", { to: activeContact, isTyping: true });
 
@@ -351,15 +491,111 @@ const Dashboard = () => {
     );
   };
 
-  const sendChatMessage = (e) => {
+  /* put an emoji where the cursor is in the message box */
+  const insertEmoji = (emoji) => {
+    const el = chatInputRef.current;
+    const start = el?.selectionStart ?? chatText.length;
+    const end = el?.selectionEnd ?? chatText.length;
+    setChatText(chatText.slice(0, start) + emoji + chatText.slice(end));
+    requestAnimationFrame(() => {
+      el?.focus();
+      const pos = start + emoji.length;
+      el?.setSelectionRange(pos, pos);
+    });
+  };
+
+  /* the image picked from the file dialog (checked again by the server) */
+  const pickImage = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // so the same file can be picked again
+    if (!file) return;
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
+      return alert("Please choose a PNG, JPG, GIF or WEBP image");
+    }
+    if (file.size > MAX_IMAGE_BYTES) return alert("Image is too big (max 5 MB)");
+    setPendingImage((prev) => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl);
+      return { file, previewUrl: URL.createObjectURL(file) };
+    });
+  };
+
+  const sendChatMessage = async (e) => {
     e.preventDefault();
-    if (!chatText.trim() || !activeContact) return;
+    const text = chatText.trim();
+    if ((!text && !pendingImage) || !activeContact || sending) return;
     const socket = socketRef.current;
     if (!socket) return;
 
-    socket.emit("message:send", { to: activeContact, text: chatText });
-    socket.emit("typing", { to: activeContact, isTyping: false });
-    setChatText("");
+    /* to ONE group, or to ONE person */
+    const payload = activeGroup
+      ? { groupId: activeGroup.id, text }
+      : { to: activeContact, text };
+
+    setSending(true);
+    if (pendingImage) {
+      try {
+        payload.image = {
+          data: await pendingImage.file.arrayBuffer(), // sent as binary
+          type: pendingImage.file.type,
+        };
+      } catch {
+        setSending(false);
+        return alert("Could not read that image");
+      }
+    }
+
+    /* if the connection drops and no answer ever comes, don't stay stuck on "Sending…" */
+    const failSafe = setTimeout(() => setSending(false), 15000);
+
+    socket.emit("message:send", payload, (res) => {
+      clearTimeout(failSafe);
+      setSending(false);
+      if (!res?.ok) return alert(res?.error || "Could not send message");
+      /* sent: now clear the box. The bubble appears when "message:new" arrives */
+      setChatText("");
+      clearPendingImage();
+      setShowEmoji(false);
+    });
+
+    if (!activeGroup) {
+      socket.emit("typing", { to: activeContact, isTyping: false });
+    }
+  };
+
+  /* ---- group chats ---- */
+  const toggleGroupPick = (name) =>
+    setGroupPick((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+    );
+
+  const closeGroupModal = () => {
+    setShowGroupModal(false);
+    setGroupName("");
+    setGroupPick([]);
+    setGroupSearch("");
+  };
+
+  const createGroup = () => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit("group:create", { name: groupName, members: groupPick }, (res) => {
+      if (!res?.ok) return alert(res?.error || "Could not create group");
+      setGroups((prev) =>
+        prev.some((x) => x.id === res.group.id) ? prev : [...prev, res.group]
+      );
+      closeGroupModal();
+      openChat(`g:${res.group.id}`);
+    });
+  };
+
+  const leaveGroup = () => {
+    const socket = socketRef.current;
+    if (!socket || !activeGroup) return;
+    if (!window.confirm(`Leave "${activeGroup.name}"? You will lose its messages.`)) return;
+    socket.emit("group:leave", { groupId: activeGroup.id }, (res) => {
+      if (!res?.ok) alert(res?.error || "Could not leave group");
+      /* on success the server sends "group:left" and the group disappears */
+    });
   };
 
   const deleteChatMessage = (id) => {
@@ -396,8 +632,13 @@ const Dashboard = () => {
 
   /* ---------- page renderers ---------- */
   const renderDashboardPage = () => {
-    const memberCount = treeSnapshot?.persons?.length || members.length;
-    const connectionCount = treeSnapshot?.relationships?.length || 6;
+    /* only people connected to ME, not every member of the app */
+    const memberCount = connected ? connected.size : 1;
+    const connectionCount = connected
+      ? (treeSnapshot?.relationships || []).filter(
+          (r) => connected.has(r.a) && connected.has(r.b)
+        ).length
+      : 0;
 
     return (
       <main className="page-content">
@@ -483,8 +724,93 @@ const Dashboard = () => {
       </div>
 
       <section className="chat-layout">
-        <aside className="chat-contacts">
-          {contacts.map((name) => (
+        <aside
+          className="chat-contacts"
+          style={{ overflowY: "auto", maxHeight: "calc(100vh - 230px)" }}
+        >
+          <input
+            type="text"
+            placeholder={`Search ${contacts.length} members...`}
+            value={contactSearch}
+            onChange={(e) => setContactSearch(e.target.value)}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "8px 10px",
+              marginBottom: 8,
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              position: "sticky",
+              top: 0,
+              zIndex: 1,
+            }}
+          />
+          {/* ---- groups ---- */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: 12,
+              fontWeight: 700,
+              opacity: 0.7,
+              padding: "4px 4px 6px",
+            }}
+          >
+            <span>GROUPS ({groups.length})</span>
+            <button
+              type="button"
+              onClick={() => setShowGroupModal(true)}
+              title="Create a group chat"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                background: "none",
+                border: "1px solid #d1d5db",
+                borderRadius: 6,
+                padding: "2px 8px",
+                cursor: "pointer",
+                fontSize: 12,
+                color: "inherit",
+              }}
+            >
+              <Plus size={13} /> New
+            </button>
+          </div>
+          {visibleGroups.map((g) => {
+            const key = `g:${g.id}`;
+            return (
+              <button
+                key={key}
+                type="button"
+                className={`chat-contact ${key === activeContact ? "active" : ""}`}
+                onClick={() => openChat(key)}
+              >
+                <span className="chat-avatar">
+                  <Users size={16} />
+                </span>
+                <span className="chat-contact-name">{g.name}</span>
+                {unread[key] > 0 && <span className="chat-badge">{unread[key]}</span>}
+              </button>
+            );
+          })}
+          {groups.length === 0 && (
+            <p style={{ fontSize: 12, opacity: 0.55, padding: "0 4px 8px" }}>
+              No groups yet. Click New to create one.
+            </p>
+          )}
+
+          {/* ---- people ---- */}
+          <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.7, padding: "10px 4px 6px" }}>
+            PEOPLE
+          </div>
+          {visibleContacts.length === 0 && (
+            <p style={{ fontSize: 13, opacity: 0.6, padding: "8px 4px" }}>
+              No member found
+            </p>
+          )}
+          {visibleContacts.map((name) => (
             <button
               key={name}
               type="button"
@@ -503,8 +829,32 @@ const Dashboard = () => {
 
         <div className="chat-window">
           <div className="chat-header">
-            <h3>{activeContact}</h3>
-            <span>{onlineUsers.includes(activeContact) ? "Online" : "Offline"}</span>
+            <h3>{activeGroup ? activeGroup.name : activeContact}</h3>
+            {activeGroup ? (
+              <span
+                title={activeGroup.members.join(", ")}
+                style={{ display: "flex", alignItems: "center", gap: 10 }}
+              >
+                {activeGroup.members.length} members
+                <button
+                  type="button"
+                  onClick={leaveGroup}
+                  style={{
+                    background: "none",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 6,
+                    padding: "2px 10px",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    color: "inherit",
+                  }}
+                >
+                  Leave
+                </button>
+              </span>
+            ) : (
+              <span>{onlineUsers.includes(activeContact) ? "Online" : "Offline"}</span>
+            )}
           </div>
 
           <div className="chat-messages">
@@ -513,7 +863,33 @@ const Dashboard = () => {
                 key={m.id}
                 className={`chat-bubble ${m.from === currentUser ? "mine" : "theirs"}`}
               >
-                <p>{m.text}</p>
+                {activeGroup && m.from !== currentUser && (
+                  <span
+                    style={{ display: "block", fontSize: 12, fontWeight: 700, opacity: 0.75, marginBottom: 2 }}
+                  >
+                    {m.from}
+                  </span>
+                )}
+                {m.imageUrl && (
+                  <img
+                    src={`${SOCKET_URL}${m.imageUrl}`}
+                    alt="shared"
+                    loading="lazy"
+                    onLoad={() => bottomRef.current?.scrollIntoView()}
+                    onClick={() =>
+                      window.open(`${SOCKET_URL}${m.imageUrl}`, "_blank", "noopener")
+                    }
+                    style={{
+                      display: "block",
+                      maxWidth: 240,
+                      maxHeight: 240,
+                      borderRadius: 8,
+                      marginBottom: m.text ? 6 : 0,
+                      cursor: "zoom-in",
+                    }}
+                  />
+                )}
+                {m.text && <p>{m.text}</p>}
                 <small>{formatTime(m.time)}</small>
                 {m.from === currentUser && (
                   <button
@@ -545,15 +921,126 @@ const Dashboard = () => {
             <div ref={bottomRef} />
           </div>
 
-          <form className="chat-input" onSubmit={sendChatMessage}>
+          {/* picked image, shown before it is sent */}
+          {pendingImage && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 12px",
+                borderTop: "1px solid #e5e7eb",
+              }}
+            >
+              <img
+                src={pendingImage.previewUrl}
+                alt="preview"
+                style={{ height: 56, borderRadius: 6 }}
+              />
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: 13,
+                  opacity: 0.7,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {pendingImage.file.name}
+              </span>
+              <button
+                type="button"
+                onClick={clearPendingImage}
+                title="Remove image"
+                style={{ background: "none", border: "none", cursor: "pointer", color: "inherit" }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+          )}
+
+          <form
+            className="chat-input"
+            onSubmit={sendChatMessage}
+            style={{ position: "relative" }}
+          >
+            {/* emoji picker */}
+            {showEmoji && (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: "100%",
+                  left: 0,
+                  zIndex: 5,
+                  width: 320,
+                  maxWidth: "92vw",
+                  maxHeight: 210,
+                  overflowY: "auto",
+                  display: "grid",
+                  gridTemplateColumns: "repeat(8, 1fr)",
+                  gap: 2,
+                  padding: 8,
+                  background: "#fff",
+                  color: "#111",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 12,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+                }}
+              >
+                {EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => insertEmoji(emoji)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: 20,
+                      padding: 4,
+                      borderRadius: 6,
+                    }}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowEmoji((v) => !v)}
+              title="Emoji"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", padding: "0 6px" }}
+            >
+              <Smile size={21} />
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Send an image"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", padding: "0 6px" }}
+            >
+              <ImageIcon size={21} />
+            </button>
             <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              onChange={pickImage}
+              style={{ display: "none" }}
+            />
+
+            <input
+              ref={chatInputRef}
               type="text"
-              placeholder={`Message ${activeContact}...`}
+              placeholder={`Message ${activeGroup ? activeGroup.name : activeContact}...`}
               value={chatText}
               onChange={handleChatInput}
             />
-            <button type="submit" className="black-button">
-              <Send size={17} /> Send
+            <button type="submit" className="black-button" disabled={sending}>
+              <Send size={17} /> {sending ? "Sending…" : "Send"}
             </button>
           </form>
         </div>
@@ -562,11 +1049,22 @@ const Dashboard = () => {
   );
 
   const renderMembersPage = () => {
-    const filteredMembers = members.filter(
-      (m) =>
-        m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        getMemberRelation(m.name).toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const q = searchTerm.toLowerCase();
+    const filteredMembers = members
+      .filter(
+        (m) =>
+          m.name.toLowerCase().includes(q) ||
+          getMemberRelation(m.name).toLowerCase().includes(q)
+      )
+      /* me first, then my relatives, then everyone else A-Z */
+      .sort(
+        (a, b) =>
+          Number(b.name === currentUser) - Number(a.name === currentUser) ||
+          Number(getMemberRelation(a.name) === "Not connected") -
+            Number(getMemberRelation(b.name) === "Not connected") ||
+          a.name.localeCompare(b.name)
+      );
+    const shownMembers = filteredMembers.slice(0, memberLimit);
 
     return (
       <main className="page-content">
@@ -584,10 +1082,10 @@ const Dashboard = () => {
           <div className="members-table-header">
             <span>Member</span><span>Relation</span><span>Email</span><span>Status</span>
           </div>
-          {filteredMembers.map((member, index) => {
+          {shownMembers.map((member) => {
             const rel = getMemberRelation(member.name);
             return (
-              <div className="members-row" key={index}>
+              <div className="members-row" key={member.name}>
                 <div className="member-name-cell">
                   <div className="member-avatar">{member.avatar}</div>
                   <div>
@@ -597,10 +1095,28 @@ const Dashboard = () => {
                 </div>
                 <span>{rel}</span>
                 <span>{getMemberEmail(member)}</span>
-                <span className="status">{member.status}</span>
+                <span className="status">
+                  {onlineUsers.includes(member.name) ? "Online" : "Offline"}
+                </span>
               </div>
             );
           })}
+
+          <div style={{ padding: 16, textAlign: "center", fontSize: 13 }}>
+            <span style={{ opacity: 0.7 }}>
+              Showing {shownMembers.length} of {filteredMembers.length} members
+            </span>
+            {filteredMembers.length > shownMembers.length && (
+              <button
+                type="button"
+                className="black-button"
+                style={{ marginLeft: 12 }}
+                onClick={() => setMemberLimit((n) => n + 25)}
+              >
+                Show 25 more
+              </button>
+            )}
+          </div>
         </section>
       </main>
     );
@@ -701,25 +1217,63 @@ const Dashboard = () => {
 
   /* ---------- no user picked ---------- */
   if (!currentUser) {
+    const pq = pickerSearch.trim().toLowerCase();
+    const matches = members.filter((m) => m.name.toLowerCase().includes(pq));
     return (
       <div style={{ padding: 60, textAlign: "center" }}>
         <h2>Who are you?</h2>
-        <p>Pick a family member for this browser tab</p>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 20 }}>
-          {members.map((m) => (
+        <p>Pick a family member for this browser tab ({members.length} members)</p>
+        <input
+          type="text"
+          autoFocus
+          placeholder="Search by name..."
+          value={pickerSearch}
+          onChange={(e) => setPickerSearch(e.target.value)}
+          style={{ padding: "10px 14px", width: 280, marginTop: 12, borderRadius: 8, border: "1px solid #d1d5db" }}
+        />
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 10,
+            justifyContent: "center",
+            marginTop: 20,
+            maxWidth: 760,
+            marginInline: "auto",
+          }}
+        >
+          {matches.slice(0, 40).map((m) => (
             <button
               key={m.name}
               type="button"
               className="black-button"
-              onClick={() => chooseUser(m.name)}
+              onClick={() => {
+                setPickerSearch("");
+                chooseUser(m.name);
+              }}
             >
               {m.avatar} {m.name}
             </button>
           ))}
         </div>
+        {matches.length > 40 && (
+          <p style={{ opacity: 0.6, fontSize: 13, marginTop: 14 }}>
+            Showing 40 of {matches.length}. Type to narrow the list.
+          </p>
+        )}
+        {matches.length === 0 && <p style={{ opacity: 0.6 }}>No member found</p>}
       </div>
     );
   }
+
+  /* people who can be added to a new group (first 60 matches; search to narrow) */
+  const groupCandidates = members
+    .filter(
+      (m) =>
+        m.name !== currentUser &&
+        m.name.toLowerCase().includes(groupSearch.trim().toLowerCase())
+    )
+    .slice(0, 60);
 
   /* =======================================================
      MAIN RENDER
@@ -805,7 +1359,9 @@ const Dashboard = () => {
                   </div>
                   <div className="profile-dropdown-divider" />
                   <div className="profile-dropdown-label">Switch User</div>
-                  {members.map((m) => (
+                  {members
+                    .filter((m) => QUICK_USERS.includes(m.name) || m.name === currentUser)
+                    .map((m) => (
                     <button
                       key={m.name}
                       type="button"
@@ -839,6 +1395,81 @@ const Dashboard = () => {
 
         {renderPage()}
       </div>
+
+      {/* ============ NEW GROUP POPUP ============ */}
+      {showGroupModal && (
+        <div className="request-overlay" onClick={closeGroupModal}>
+          <div
+            className="request-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: 420, maxWidth: "92vw", textAlign: "left" }}
+          >
+            <h3>New group</h3>
+
+            <input
+              type="text"
+              placeholder="Group name"
+              value={groupName}
+              maxLength={60}
+              onChange={(e) => setGroupName(e.target.value)}
+              style={{ width: "100%", boxSizing: "border-box", padding: "9px 10px", marginBottom: 8, border: "1px solid #d1d5db", borderRadius: 8 }}
+            />
+            <input
+              type="text"
+              placeholder="Search members to add..."
+              value={groupSearch}
+              onChange={(e) => setGroupSearch(e.target.value)}
+              style={{ width: "100%", boxSizing: "border-box", padding: "9px 10px", marginBottom: 8, border: "1px solid #d1d5db", borderRadius: 8 }}
+            />
+
+            <div
+              style={{
+                maxHeight: 230,
+                overflowY: "auto",
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                padding: 4,
+              }}
+            >
+              {groupCandidates.map((m) => (
+                <label
+                  key={m.name}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 6px", cursor: "pointer" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={groupPick.includes(m.name)}
+                    onChange={() => toggleGroupPick(m.name)}
+                  />
+                  <span>{m.avatar}</span>
+                  <span>{m.name}</span>
+                </label>
+              ))}
+              {groupCandidates.length === 0 && (
+                <p style={{ fontSize: 13, opacity: 0.6, padding: 8 }}>No member found</p>
+              )}
+            </div>
+
+            <p style={{ fontSize: 12, opacity: 0.7, margin: "8px 0" }}>
+              {groupPick.length} selected. You are added automatically.
+              {groupPick.length > 0 && ` (${groupPick.slice(0, 4).join(", ")}${groupPick.length > 4 ? "…" : ""})`}
+            </p>
+
+            <div className="request-actions">
+              <button
+                className="tree-action-btn accept"
+                onClick={createGroup}
+                disabled={!groupName.trim() || groupPick.length < 1}
+              >
+                Create group
+              </button>
+              <button className="tree-action-btn reject" onClick={closeGroupModal}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ============ GLOBAL REQUEST POPUP ============ */}
       {incomingRequest && (

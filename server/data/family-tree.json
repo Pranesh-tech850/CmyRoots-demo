@@ -1,5 +1,5 @@
 {
-  "version": 129,
+  "version": 132,
   "persons": {
     "user:sarah": {
       "id": "user:sarah",
@@ -159,7 +159,7 @@
       "toEmail": "praneshsixteen@gmail.com",
       "toName": "harshi",
       "relation": "Spouse",
-      "status": "pending",
+      "status": "cancelled",
       "createdAt": 1791975240184,
       "expiresAt": 1792580040184
     },

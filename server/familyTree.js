@@ -361,6 +361,35 @@ function setGender({ personId, gender }) {
 
 /* ---------- accounts ---------- */
 
+/* Make sure every member of the `users` table is also a person in the tree,
+   so they can be found by email/name even before they have logged in.
+   Existing people are never changed (only missing email/gender are filled). */
+function syncMembers(members) {
+  return commit((s) => {
+    for (const m of members) {
+      const name = cleanName(m.name);
+      if (!name) continue;
+      const id = `user:${norm(name)}`;
+      const existing = s.persons[id];
+
+      if (existing) {
+        if (!existing.email) existing.email = normEmail(m.email) || defaultEmail(name);
+        if (!existing.gender && m.gender) existing.gender = m.gender;
+        continue;
+      }
+      if (findByName(s, name)) continue; // that name is used by a non-account person
+
+      s.persons[id] = {
+        id,
+        name,
+        email: normEmail(m.email) || defaultEmail(name),
+        gender: m.gender || null,
+      };
+    }
+    return null;
+  });
+}
+
 function setEmail({ personId, email }) {
   return commit((s) => {
     const p = s.persons[personId];
@@ -796,4 +825,4 @@ function registerTreeHandlers(io, socket) {
   socket.emit("tree:state", snapshot());
 }
 
-module.exports = { registerTreeHandlers, registerTreeRoutes };
+module.exports = { registerTreeHandlers, registerTreeRoutes, syncMembers };
