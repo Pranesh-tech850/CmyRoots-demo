@@ -1,7 +1,7 @@
 // server/server.js
-// Setup:  npm init -y && npm i express socket.io cors nodemailer dotenv pg
+// Setup:  npm init -y && npm i express socket.io cors nodemailer dotenv pg jsonwebtoken
 // Run:    node server.js
-require("dotenv").config(); // loads server/.env (DATABASE_URL, SMTP settings, PUBLIC_URL)
+require("dotenv").config(); // loads server/.env (DATABASE_URL, SMTP settings, JWT_SECRET)
 
 const express = require("express");
 const http = require("http");
@@ -9,7 +9,15 @@ const cors = require("cors");
 const { Server } = require("socket.io");
 
 // Family tree: relationship logic, persistence, real-time sync, email links
-const { registerTreeHandlers, registerTreeRoutes, syncMembers } = require("./familyTree");
+const {
+  registerTreeHandlers,
+  registerTreeRoutes,
+  syncMembers,
+  getSnapshot,
+} = require("./familyTree");
+
+// Login / sign up (passwords + tokens)
+const { registerAuthRoutes, requireAuth, verifyToken, hashPassword } = require("./auth");
 
 // Chat messages are stored in PostgreSQL (database: chat_app)
 const {
@@ -24,6 +32,8 @@ const {
   getGroupMembers,
   createGroup,
   leaveGroup,
+  findAccount,
+  setDemoPasswords,
 } = require("./db");
 
 // Chat images are saved on disk (server/uploads), only their URL goes in PostgreSQL
@@ -58,8 +68,16 @@ const io = new Server(server, {
   },
 });
 
-// The member list (loaded from PostgreSQL) for the app: chat contacts, Members page
-app.get("/api/members", async (req, res) => {
+// Login, sign up, "who am I". A new member also becomes a person in the family tree.
+registerAuthRoutes(app, {
+  onNewMember: async (user) => {
+    syncMembers([{ name: user.username, email: user.email, gender: user.gender }]);
+    io.emit("tree:state", getSnapshot());
+  },
+});
+
+// The member list (only for logged-in users): chat contacts, Members page
+app.get("/api/members", requireAuth, async (req, res) => {
   try {
     res.json(await listMembers());
   } catch (err) {
@@ -77,12 +95,18 @@ const broadcastPresence = () => {
   io.emit("presence", Object.keys(onlineCount));
 };
 
-// Every connection must say who it is
-io.use((socket, next) => {
-  const username = socket.handshake.auth?.username;
-  if (!username) return next(new Error("username required"));
-  socket.username = username;
-  next();
+// Every connection must prove who it is with the token from login
+io.use(async (socket, next) => {
+  try {
+    const name = verifyToken(socket.handshake.auth?.token);
+    if (!name) return next(new Error("unauthorized"));
+    const account = await findAccount(name); // the account must still exist
+    if (!account) return next(new Error("unauthorized"));
+    socket.username = account.username; // exact spelling from the database
+    next();
+  } catch {
+    next(new Error("unauthorized"));
+  }
 });
 
 io.on("connection", (socket) => {
@@ -279,6 +303,12 @@ async function start() {
 
   // 2. everything else
   try {
+    // optional: let the 4 demo members log in with one password from .env
+    if (process.env.DEMO_PASSWORD) {
+      const n = await setDemoPasswords(await hashPassword(process.env.DEMO_PASSWORD));
+      if (n) console.log(`🔑 DEMO_PASSWORD set for ${n} demo member(s)`);
+    }
+
     // every member in the database also becomes a person in the family tree
     const members = await listMembers();
     syncMembers(members);

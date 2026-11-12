@@ -46,6 +46,16 @@ const SCHEMA = `
   CREATE UNIQUE INDEX IF NOT EXISTS users_username_key ON users (lower(username));
   CREATE UNIQUE INDEX IF NOT EXISTS users_email_key    ON users (lower(email));
 
+  /* login: the hashed password (never the real one) */
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+  /* personal details (filled in by each member on the Settings page) */
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS dob          DATE;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS phone        TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_place  TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS current_city TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS occupation   TEXT;
+
   /* group chats */
   CREATE TABLE IF NOT EXISTS chat_groups (
     id          BIGSERIAL    PRIMARY KEY,
@@ -204,6 +214,115 @@ async function findUser(name) {
   return rows[0] ? rows[0].username : null;
 }
 
+/* ---------------- accounts (login) ---------------- */
+
+/* The full account row, including the password hash, or null.
+   `nameOrEmail` can be the username OR the email (login uses both).
+   Used by login and by the socket check in server.js. */
+async function findAccount(nameOrEmail) {
+  const { rows } = await pool.query(
+    `SELECT username, email, gender, avatar, password_hash
+       FROM users
+      WHERE lower(username) = lower($1) OR lower(email) = lower($1)
+      LIMIT 1`,
+    [String(nameOrEmail || "").trim()]
+  );
+  if (!rows[0]) return null;
+  const r = rows[0];
+  return {
+    username: r.username,
+    email: r.email,
+    gender: r.gender,
+    avatar: r.avatar || "👤",
+    passwordHash: r.password_hash,
+    password_hash: r.password_hash, // both spellings, in case auth.js uses either
+  };
+}
+
+/* Sign up: create a member with a password hash.
+   Returns { user } or { error } (name or email already taken). */
+async function createAccount({ username, email, gender = null, passwordHash }) {
+  const { rows } = await pool.query(
+    `INSERT INTO users (username, email, gender, avatar, password_hash)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING
+     RETURNING username, email, gender, avatar`,
+    [username, email, gender, gender === "F" ? "👩🏻" : gender === "M" ? "👨🏻" : null, passwordHash]
+  );
+  if (!rows[0]) return { error: "That name or email is already registered" };
+  return { user: { ...rows[0], avatar: rows[0].avatar || "👤" } };
+}
+
+/* Give the 4 demo members one shared password (only those without one yet).
+   Returns how many were updated. */
+async function setDemoPasswords(hash) {
+  const r = await pool.query(
+    `UPDATE users
+        SET password_hash = $1
+      WHERE lower(username) = ANY($2::text[])
+        AND password_hash IS NULL`,
+    [hash, DEMO_USERS.map((u) => u.username.toLowerCase())]
+  );
+  return r.rowCount;
+}
+
+/* Change a member's email (login uses this column).
+   Returns { ok: true } or { error }. */
+async function updateEmail({ username, email }) {
+  try {
+    const r = await pool.query(
+      `UPDATE users SET email = $1 WHERE lower(username) = lower($2)`,
+      [String(email || "").trim().toLowerCase(), String(username || "")]
+    );
+    if (r.rowCount === 0) return { error: "Member not found" };
+    return { ok: true };
+  } catch (err) {
+    if (err.code === "23505") return { error: "That email is already used by another member" };
+    throw err;
+  }
+}
+
+/* ---------------- personal profile ---------------- */
+
+/* One member's own details. dob is returned as "YYYY-MM-DD" text on purpose:
+   a JS Date would shift the day with the server's time zone. */
+async function getProfile(username) {
+  const { rows } = await pool.query(
+    `SELECT username, email, gender, avatar,
+            to_char(dob, 'YYYY-MM-DD') AS dob,
+            phone, birth_place, current_city, occupation
+       FROM users
+      WHERE lower(username) = lower($1)`,
+    [String(username || "")]
+  );
+  if (!rows[0]) return null;
+  const r = rows[0];
+  return {
+    name: r.username,
+    email: r.email,
+    gender: r.gender,
+    avatar: r.avatar || "👤",
+    dob: r.dob,
+    phone: r.phone,
+    birthPlace: r.birth_place,
+    currentCity: r.current_city,
+    occupation: r.occupation,
+  };
+}
+
+/* Save a member's details (already validated by server.js).
+   Returns the updated profile, or null if the member does not exist. */
+async function updateProfile(username, { dob, phone, birthPlace, currentCity, occupation }) {
+  const r = await pool.query(
+    `UPDATE users
+        SET dob = $2, phone = $3, birth_place = $4, current_city = $5, occupation = $6
+      WHERE lower(username) = lower($1)`,
+    [String(username || ""), dob, phone, birthPlace, currentCity, occupation]
+  );
+  if (r.rowCount === 0) return null;
+  return getProfile(username);
+}
+
 /* ---------------- groups ---------------- */
 
 const isId = (v) => /^\d+$/.test(String(v));
@@ -326,6 +445,12 @@ module.exports = {
   addMembers,
   listMembers,
   findUser,
+  findAccount,
+  createAccount,
+  setDemoPasswords,
+  updateEmail,
+  getProfile,
+  updateProfile,
   getGroup,
   getGroupsFor,
   getGroupMembers,

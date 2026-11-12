@@ -29,6 +29,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { sendRequestEmail } = require("./mailer");
+const db = require("./db"); // the users table (login emails live there)
 
 const DATA_FILE = path.join(__dirname, "data", "family-tree.json");
 
@@ -143,6 +144,24 @@ function linkCouple(s, parentId, childId) {
 function inheritParents(s, fromId, toId) {
   if (parentsOf(s, toId).length) return;
   parentsOf(s, fromId).forEach((p) => addParent(s, p, toId));
+}
+
+/* everyone linked to `startId` by any chain of relatives (including itself).
+   Used to decide whose part of the tree a user is allowed to change. */
+function connectedTo(s, startId) {
+  const seen = new Set([startId]);
+  const queue = [startId];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const r of s.relationships) {
+      const next = r.a === cur ? r.b : r.b === cur ? r.a : null;
+      if (next && !seen.has(next)) {
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return seen;
 }
 
 function prune(s) {
@@ -692,7 +711,7 @@ function registerTreeRoutes(app, io) {
 /* ---------- socket wiring ---------- */
 
 function registerTreeHandlers(io, socket) {
-  const username = socket.handshake?.auth?.username;
+ const username = socket.username; // verified by the login token (server.js)
   const name = cleanName(username);
   const myId = name ? `user:${norm(name)}` : null;
 
@@ -711,10 +730,11 @@ function registerTreeHandlers(io, socket) {
 
   if (myId) socket.join(myId);
 
-  const run = (op) => (payload, ack) => {
+  /* `op` may be sync or async (setEmail also writes to PostgreSQL) */
+  const run = (op) => async (payload, ack) => {
     let res;
     try {
-      res = op(payload || {});
+      res = await op(payload || {});
     } catch (err) {
       console.error("tree op failed:", err);
       res = { ok: false, error: "Server error" };
@@ -734,7 +754,20 @@ function registerTreeHandlers(io, socket) {
     if (typeof ack === "function") ack(snapshot());
   });
 
-  socket.on("tree:addRelative", run(addRelative));
+  /* You can only change your own side of the family: the person you are
+     adding to must be you, or someone connected to you in the tree. */
+  const NOT_YOURS = "You can only change your own family";
+
+  socket.on(
+    "tree:addRelative",
+    run((payload) => {
+      if (!myId) return { ok: false, error: "Not signed in" };
+      if (!connectedTo(state, myId).has(payload.personId)) {
+        return { ok: false, error: NOT_YOURS };
+      }
+      return addRelative(payload);
+    })
+  );
 
   /* the sender is ALWAYS the socket's own identity, never the payload.
      The recipient can be given by id OR by email. */
@@ -813,16 +846,62 @@ function registerTreeHandlers(io, socket) {
 
   socket.on(
     "tree:setEmail",
-    run((payload) => {
+    run(async (payload) => {
       if (!myId) return { ok: false, error: "Not signed in" };
-      return setEmail({ personId: myId, email: payload.email });
+
+      const email = normEmail(payload.email);
+      if (!isEmail(email)) {
+        return { ok: false, error: "Please enter a valid email address" };
+      }
+
+      /* the tree's own duplicate check first, so nothing is half-saved */
+      const taken = Object.values(state.persons).find(
+        (x) => x.id !== myId && x.email && normEmail(x.email) === email
+      );
+      if (taken) {
+        return { ok: false, error: "That email is already used by another member" };
+      }
+
+      /* 1. PostgreSQL (this is what login uses), 2. the tree */
+      const saved = await db.updateEmail({ username, email });
+      if (saved.error) return { ok: false, error: saved.error };
+
+      return setEmail({ personId: myId, email });
     })
   );
 
-  socket.on("tree:removeRelation", run(removeRelation));
-  socket.on("tree:setGender", run(setGender));
+  socket.on(
+    "tree:removeRelation",
+    run((payload) => {
+      if (!myId) return { ok: false, error: "Not signed in" };
+      const mine = connectedTo(state, myId);
+      if (!mine.has(payload.personId) || (payload.otherId && !mine.has(payload.otherId))) {
+        return { ok: false, error: NOT_YOURS };
+      }
+      return removeRelation(payload);
+    })
+  );
+
+  socket.on(
+    "tree:setGender",
+    run((payload) => {
+      if (!myId) return { ok: false, error: "Not signed in" };
+      /* an account's gender is changed only by its owner;
+         relatives without a login can be set by anyone connected to them */
+      const allowed =
+        payload.personId === myId ||
+        (!isUserId(payload.personId) && connectedTo(state, myId).has(payload.personId));
+      if (!allowed) return { ok: false, error: NOT_YOURS };
+      return setGender(payload);
+    })
+  );
 
   socket.emit("tree:state", snapshot());
 }
 
-module.exports = { registerTreeHandlers, registerTreeRoutes, syncMembers };
+module.exports = {
+  registerTreeHandlers,
+  registerTreeRoutes,
+  syncMembers,
+  getSnapshot: snapshot,
+};

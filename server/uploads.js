@@ -34,12 +34,13 @@ function detectImageType(buf) {
   return null;
 }
 
-/* data = what the browser sent (Buffer / ArrayBuffer).
+/* data = what the browser sent (Buffer / ArrayBuffer / typed array).
    Returns { url } on success or { error } with a message for the user. */
 async function saveImage(data) {
   let buf;
   if (Buffer.isBuffer(data)) buf = data;
-  else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) buf = Buffer.from(data.buffer || data);
+  else if (data instanceof ArrayBuffer) buf = Buffer.from(data);
+  else if (ArrayBuffer.isView(data)) buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
   else return { error: "That is not a valid image" };
 
   if (buf.length === 0) return { error: "That image is empty" };

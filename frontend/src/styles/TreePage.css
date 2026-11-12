@@ -1146,3 +1146,14 @@
     border-radius: 14px;
   }
 }
+
+/* tree is fixed: no grab/drag cursor on the canvas */
+.family-tree-flow .react-flow__pane,
+.family-tree-flow .react-flow__pane.draggable,
+.family-tree-flow .react-flow__pane.dragging,
+.family-tree-flow .react-flow__node {
+  cursor: default !important;
+}
+.family-tree-flow .react-flow__node {
+  cursor: pointer !important;
+}

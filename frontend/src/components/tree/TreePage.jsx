@@ -382,7 +382,10 @@ const TreePage = ({ socket, currentUser }) => {
             nodesDraggable={false}
             nodesConnectable={false}
             elementsSelectable={true}
-            panOnDrag={true}
+            panOnDrag={false}
+            selectionOnDrag={false}
+            panOnScroll={false}
+            nodeDragThreshold={9999}
             zoomOnScroll={true}
             zoomOnPinch={true}
             zoomOnDoubleClick={false}
