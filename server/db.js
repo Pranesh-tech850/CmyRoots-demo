@@ -46,15 +46,8 @@ const SCHEMA = `
   CREATE UNIQUE INDEX IF NOT EXISTS users_username_key ON users (lower(username));
   CREATE UNIQUE INDEX IF NOT EXISTS users_email_key    ON users (lower(email));
 
-  /* login: the hashed password (never the real one) */
+  /* login: salted password hash (NULL = account cannot log in yet) */
   ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
-
-  /* personal details (filled in by each member on the Settings page) */
-  ALTER TABLE users ADD COLUMN IF NOT EXISTS dob          DATE;
-  ALTER TABLE users ADD COLUMN IF NOT EXISTS phone        TEXT;
-  ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_place  TEXT;
-  ALTER TABLE users ADD COLUMN IF NOT EXISTS current_city TEXT;
-  ALTER TABLE users ADD COLUMN IF NOT EXISTS occupation   TEXT;
 
   /* group chats */
   CREATE TABLE IF NOT EXISTS chat_groups (
@@ -88,13 +81,9 @@ const SCHEMA = `
   END $$;
 `;
 
-/* the original four, always present */
-const DEMO_USERS = [
-  { username: "Sarah",  gender: "F", avatar: "👩🏻" },
-  { username: "Robert", gender: "M", avatar: "👨🏻" },
-  { username: "Linda",  gender: "F", avatar: "👩🏻" },
-  { username: "Mike",   gender: "M", avatar: "👦🏻" },
-];
+/* the old demo members. They are NOT created any more; this list is only
+   used once, to clean them out of a database that still has them. */
+const OLD_DEMO_NAMES = ["sarah", "robert", "linda", "mike"];
 
 const emailFor = (name) => `${name.toLowerCase()}@example.com`;
 
@@ -108,13 +97,6 @@ const toMessage = (row) => ({
   imageUrl: row.image_url || null, // e.g. "/uploads/ab12....png"
   time: row.created_at.toISOString(),
 });
-
-/* demo conversation, inserted only when the table is empty */
-const SEED = [
-  { from: "Linda",  to: "Sarah", text: "Don't forget family dinner this Sunday!", hoursAgo: 3 },
-  { from: "Mike",   to: "Sarah", text: "Can you check the family tree?",           hoursAgo: 20 },
-  { from: "Robert", to: "Sarah", text: "I uploaded the Easter photos.",            hoursAgo: 24 },
-];
 
 /* Insert members. Names/emails that already exist are skipped, so this is
    safe to run again and again. Returns how many were really added. */
@@ -145,22 +127,116 @@ async function listMembers() {
   }));
 }
 
+/* ---------------- accounts (login) ---------------- */
+
+/* a member found by name OR email, with the password hash (server use only) */
+async function findAccount(identifier) {
+  const id = String(identifier || "").trim();
+  if (!id) return null;
+  const { rows } = await pool.query(
+    `SELECT username, email, gender, avatar, password_hash
+     FROM users
+     WHERE lower(username) = lower($1) OR lower(email) = lower($1)
+     ORDER BY (lower(username) = lower($1)) DESC
+     LIMIT 1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+/* Create a new account. Returns { user } or { error }.
+   An account made BEFORE login existed has no password yet: whoever signs up
+   with that same name AND email "claims" it and sets its password. */
+async function createAccount({ username, email, gender, passwordHash }) {
+  const avatar = gender === "M" ? "👨🏻" : gender === "F" ? "👩🏻" : "👤";
+
+  const old = await pool.query(
+    `SELECT id FROM users
+     WHERE lower(username) = lower($1) AND lower(email) = lower($2) AND password_hash IS NULL`,
+    [username, email]
+  );
+  if (old.rows[0]) {
+    const { rows } = await pool.query(
+      `UPDATE users
+       SET password_hash = $1, gender = COALESCE($2, gender)
+       WHERE id = $3
+       RETURNING username, email, gender, avatar`,
+      [passwordHash, gender || null, old.rows[0].id]
+    );
+    return { user: rows[0] };
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO users (username, email, gender, avatar, password_hash)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING username, email, gender, avatar`,
+      [username, email, gender || null, avatar, passwordHash]
+    );
+    return { user: rows[0] };
+  } catch (err) {
+    if (err.code === "23505") {
+      // unique violation: the name or the email already exists
+      const byName = /username/.test(err.constraint || err.detail || "");
+      return {
+        error: byName
+          ? "That name is already taken. Add a last name or number. (If it is your old account, sign up with the email it was created with.)"
+          : "An account with that email already exists. Try logging in.",
+      };
+    }
+    throw err;
+  }
+}
+
 async function initDb() {
   await pool.query(SCHEMA);
-  await addMembers(DEMO_USERS);
+  console.log("🐘 PostgreSQL connected, chat messages table ready");
+}
 
-  const { rows } = await pool.query("SELECT COUNT(*)::int AS n FROM messages");
-  if (rows[0].n === 0) {
-    for (const m of SEED) {
-      await pool.query(
-        `INSERT INTO messages (sender, receiver, text, created_at)
-         VALUES ($1, $2, $3, now() - ($4 || ' hours')::interval)`,
-        [m.from, m.to, m.text, String(m.hoursAgo)]
+/* One-time clean-up: delete the old demo members (Sarah, Robert, Linda, Mike
+   with their @example.com emails), their messages and their group places.
+   Real people who signed up with those names are NOT touched (their email differs).
+   Returns { names, images } so the server can clean the tree and the files. */
+async function removeDemoAccounts() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const del = await client.query(
+      `DELETE FROM users
+       WHERE lower(username) = ANY($1::text[])
+         AND lower(email) = (lower(username) || '@example.com')
+       RETURNING username`,
+      [OLD_DEMO_NAMES]
+    );
+    const names = del.rows.map((r) => r.username);
+    let images = [];
+
+    if (names.length) {
+      const imgs = await client.query(
+        `SELECT image_url FROM messages
+         WHERE image_url IS NOT NULL AND (sender = ANY($1::text[]) OR receiver = ANY($1::text[]))`,
+        [names]
+      );
+      images = imgs.rows.map((r) => r.image_url);
+
+      await client.query(
+        `DELETE FROM messages WHERE sender = ANY($1::text[]) OR receiver = ANY($1::text[])`,
+        [names]
+      );
+      await client.query(`DELETE FROM group_members WHERE username = ANY($1::text[])`, [names]);
+      await client.query(
+        `DELETE FROM chat_groups g
+         WHERE NOT EXISTS (SELECT 1 FROM group_members m WHERE m.group_id = g.id)`
       );
     }
-    console.log("🐘 inserted demo chat messages");
+    await client.query("COMMIT");
+    return { names, images };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-  console.log("🐘 PostgreSQL connected, chat messages table ready");
 }
 
 /* the user's latest conversations, oldest first */
@@ -212,115 +288,6 @@ async function findUser(name) {
     [String(name || "")]
   );
   return rows[0] ? rows[0].username : null;
-}
-
-/* ---------------- accounts (login) ---------------- */
-
-/* The full account row, including the password hash, or null.
-   `nameOrEmail` can be the username OR the email (login uses both).
-   Used by login and by the socket check in server.js. */
-async function findAccount(nameOrEmail) {
-  const { rows } = await pool.query(
-    `SELECT username, email, gender, avatar, password_hash
-       FROM users
-      WHERE lower(username) = lower($1) OR lower(email) = lower($1)
-      LIMIT 1`,
-    [String(nameOrEmail || "").trim()]
-  );
-  if (!rows[0]) return null;
-  const r = rows[0];
-  return {
-    username: r.username,
-    email: r.email,
-    gender: r.gender,
-    avatar: r.avatar || "👤",
-    passwordHash: r.password_hash,
-    password_hash: r.password_hash, // both spellings, in case auth.js uses either
-  };
-}
-
-/* Sign up: create a member with a password hash.
-   Returns { user } or { error } (name or email already taken). */
-async function createAccount({ username, email, gender = null, passwordHash }) {
-  const { rows } = await pool.query(
-    `INSERT INTO users (username, email, gender, avatar, password_hash)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT DO NOTHING
-     RETURNING username, email, gender, avatar`,
-    [username, email, gender, gender === "F" ? "👩🏻" : gender === "M" ? "👨🏻" : null, passwordHash]
-  );
-  if (!rows[0]) return { error: "That name or email is already registered" };
-  return { user: { ...rows[0], avatar: rows[0].avatar || "👤" } };
-}
-
-/* Give the 4 demo members one shared password (only those without one yet).
-   Returns how many were updated. */
-async function setDemoPasswords(hash) {
-  const r = await pool.query(
-    `UPDATE users
-        SET password_hash = $1
-      WHERE lower(username) = ANY($2::text[])
-        AND password_hash IS NULL`,
-    [hash, DEMO_USERS.map((u) => u.username.toLowerCase())]
-  );
-  return r.rowCount;
-}
-
-/* Change a member's email (login uses this column).
-   Returns { ok: true } or { error }. */
-async function updateEmail({ username, email }) {
-  try {
-    const r = await pool.query(
-      `UPDATE users SET email = $1 WHERE lower(username) = lower($2)`,
-      [String(email || "").trim().toLowerCase(), String(username || "")]
-    );
-    if (r.rowCount === 0) return { error: "Member not found" };
-    return { ok: true };
-  } catch (err) {
-    if (err.code === "23505") return { error: "That email is already used by another member" };
-    throw err;
-  }
-}
-
-/* ---------------- personal profile ---------------- */
-
-/* One member's own details. dob is returned as "YYYY-MM-DD" text on purpose:
-   a JS Date would shift the day with the server's time zone. */
-async function getProfile(username) {
-  const { rows } = await pool.query(
-    `SELECT username, email, gender, avatar,
-            to_char(dob, 'YYYY-MM-DD') AS dob,
-            phone, birth_place, current_city, occupation
-       FROM users
-      WHERE lower(username) = lower($1)`,
-    [String(username || "")]
-  );
-  if (!rows[0]) return null;
-  const r = rows[0];
-  return {
-    name: r.username,
-    email: r.email,
-    gender: r.gender,
-    avatar: r.avatar || "👤",
-    dob: r.dob,
-    phone: r.phone,
-    birthPlace: r.birth_place,
-    currentCity: r.current_city,
-    occupation: r.occupation,
-  };
-}
-
-/* Save a member's details (already validated by server.js).
-   Returns the updated profile, or null if the member does not exist. */
-async function updateProfile(username, { dob, phone, birthPlace, currentCity, occupation }) {
-  const r = await pool.query(
-    `UPDATE users
-        SET dob = $2, phone = $3, birth_place = $4, current_city = $5, occupation = $6
-      WHERE lower(username) = lower($1)`,
-    [String(username || ""), dob, phone, birthPlace, currentCity, occupation]
-  );
-  if (r.rowCount === 0) return null;
-  return getProfile(username);
 }
 
 /* ---------------- groups ---------------- */
@@ -445,15 +412,12 @@ module.exports = {
   addMembers,
   listMembers,
   findUser,
-  findAccount,
-  createAccount,
-  setDemoPasswords,
-  updateEmail,
-  getProfile,
-  updateProfile,
   getGroup,
   getGroupsFor,
   getGroupMembers,
   createGroup,
   leaveGroup,
+  findAccount,
+  createAccount,
+  removeDemoAccounts,
 };

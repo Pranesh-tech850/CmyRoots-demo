@@ -14,10 +14,12 @@ const {
   registerTreeRoutes,
   syncMembers,
   getSnapshot,
+  removeMembers,
+  getConnectedNames,
 } = require("./familyTree");
 
 // Login / sign up (passwords + tokens)
-const { registerAuthRoutes, requireAuth, verifyToken, hashPassword } = require("./auth");
+const { registerAuthRoutes, requireAuth, verifyToken } = require("./auth");
 
 // Chat messages are stored in PostgreSQL (database: chat_app)
 const {
@@ -33,7 +35,7 @@ const {
   createGroup,
   leaveGroup,
   findAccount,
-  setDemoPasswords,
+  removeDemoAccounts,
 } = require("./db");
 
 // Chat images are saved on disk (server/uploads), only their URL goes in PostgreSQL
@@ -76,10 +78,14 @@ registerAuthRoutes(app, {
   },
 });
 
-// The member list (only for logged-in users): chat contacts, Members page
+// The member list for the logged-in person: THEMSELVES + the members linked to them
+// in their family tree. Nobody else's name or email is sent.
 app.get("/api/members", requireAuth, async (req, res) => {
   try {
-    res.json(await listMembers());
+    const mine = new Set(getConnectedNames(req.username).map((n) => n.toLowerCase()));
+    mine.add(req.username.toLowerCase());
+    const all = await listMembers();
+    res.json(all.filter((m) => mine.has(m.name.toLowerCase())));
   } catch (err) {
     console.error("🐘 could not load members:", err.message);
     res.status(500).json({ error: "Could not load members" });
@@ -303,10 +309,12 @@ async function start() {
 
   // 2. everything else
   try {
-    // optional: let the 4 demo members log in with one password from .env
-    if (process.env.DEMO_PASSWORD) {
-      const n = await setDemoPasswords(await hashPassword(process.env.DEMO_PASSWORD));
-      if (n) console.log(`🔑 DEMO_PASSWORD set for ${n} demo member(s)`);
+    // one-time clean-up of the old demo members (Sarah, Robert, Linda, Mike)
+    const demo = await removeDemoAccounts();
+    if (demo.names.length) {
+      removeMembers(demo.names);
+      demo.images.forEach(removeImage);
+      console.log(`🧹 removed old demo members: ${demo.names.join(", ")}`);
     }
 
     // every member in the database also becomes a person in the family tree

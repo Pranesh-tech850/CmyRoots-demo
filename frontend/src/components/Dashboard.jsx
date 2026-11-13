@@ -10,9 +10,7 @@ import {
   SOCKET_URL,
   isGroupKey,
   MAX_IMAGE_BYTES,
-  DEFAULT_MEMBERS,
-  DEFAULT_RELATIONS,
-} from "../components/constant";
+} from "./constant";
 
 import Sidebar from "./layout/Sidebar";
 import Topbar from "./layout/Topbar";
@@ -29,25 +27,10 @@ const Dashboard = ({ session, onLogout }) => {
   const currentUser = session.user.name;
   const token = session.token;
 
-  /* ---------- members (loaded from PostgreSQL through the server) ---------- */
-  const [members, setMembers] = useState(DEFAULT_MEMBERS);
+  /* ---------- members: ME + the people linked to me in my family tree ----------
+     (the server sends only these; a brand-new account sees only itself) */
+  const [members, setMembers] = useState(() => [session.user]);
 
-  useEffect(() => {
-    fetch(`${SOCKET_URL}/api/members`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => {
-        if (r.status === 401) {
-          onLogout(); // the login expired
-          return null;
-        }
-        return r.json();
-      })
-      .then((list) => {
-        if (Array.isArray(list) && list.length) setMembers(list);
-      })
-      .catch(() => {}); // keep the default list if the server is not reachable
-  }, [token, onLogout]);
 
   const [contactSearch, setContactSearch] = useState("");
   const [memberLimit, setMemberLimit] = useState(25);
@@ -71,7 +54,7 @@ const Dashboard = ({ session, onLogout }) => {
   const [chatMessages, setChatMessages] = useState([]);
   const [groups, setGroups] = useState([]); // group chats I belong to
   const [selectedContact, setSelectedContact] = useState(
-    () => contacts[0] || "Robert"
+    () => contacts[0] || ""
   );
   /* a person's name, or "g:<id>" for a group */
   const activeContact = isGroupKey(selectedContact)
@@ -80,6 +63,7 @@ const Dashboard = ({ session, onLogout }) => {
       : contacts[0] || ""
     : contacts.includes(selectedContact)
     ? selectedContact
+
     : contacts[0] || "";
   const activeGroup = isGroupKey(activeContact)
     ? groups.find((g) => `g:${g.id}` === activeContact)
@@ -112,6 +96,7 @@ const Dashboard = ({ session, onLogout }) => {
       if (ts > (t[other] || 0)) t[other] = ts;
     });
     return t;
+
   }, [chatMessages, currentUser]);
 
   /* my groups, same order rules as people: unread, recent, A-Z */
@@ -143,6 +128,26 @@ const Dashboard = ({ session, onLogout }) => {
   const [treeSocket, setTreeSocket] = useState(null);
   const [treeSnapshot, setTreeSnapshot] = useState(null);
 
+  /* load my members, and again whenever my tree changes (a new relative accepted) */
+
+  const treeVersion = treeSnapshot?.version;
+  useEffect(() => {
+    fetch(`${SOCKET_URL}/api/members`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => {
+        if (r.status === 401) {
+          onLogout(); // the login expired
+          return null;
+        }
+        return r.json();
+      })
+      .then((list) => {
+        if (Array.isArray(list) && list.length) setMembers(list);
+      })
+      .catch(() => {}); // keep the current list if the server is not reachable
+  }, [token, onLogout, treeVersion]);
+
   /* ---- global request state ---- */
   const [incomingRequest, setIncomingRequest] = useState(null);
   const [outgoingRequests, setOutgoingRequests] = useState([]);
@@ -157,6 +162,7 @@ const Dashboard = ({ session, onLogout }) => {
 
   useEffect(() => {
     activeContactRef.current = activeContact;
+
   }, [activeContact]);
 
   useEffect(() => {
@@ -190,6 +196,7 @@ const Dashboard = ({ session, onLogout }) => {
 
     socket.on("tree:state", (state) => setTreeSnapshot(state));
 
+
     socket.emit("tree:get", (state) => {
       if (state) setTreeSnapshot(state);
     });
@@ -221,6 +228,7 @@ const Dashboard = ({ session, onLogout }) => {
       setGroups((prev) => prev.map((x) => (x.id === g.id ? g : x)))
     );
     socket.on("group:left", ({ groupId }) => {
+
       setGroups((prev) => prev.filter((x) => x.id !== groupId));
       setChatMessages((prev) => prev.filter((m) => m.groupId !== groupId));
       setUnread((u) => {
@@ -253,6 +261,7 @@ const Dashboard = ({ session, onLogout }) => {
   /* listen for tree:request at the Dashboard level so the popup
      shows up on EVERY page, not just Tree */
   useEffect(() => {
+
     if (!treeSocket || !currentUser) return;
     const myId = `user:${currentUser.toLowerCase()}`;
 
@@ -285,6 +294,7 @@ const Dashboard = ({ session, onLogout }) => {
       /* otherwise show the next pending one (or close the popup) */
       const first = inbox[0];
       if (!first) return null;
+
       const sender = treeSnapshot.persons.find((p) => p.id === first.fromId);
       const subject =
         first.subjectId && first.subjectId !== first.fromId
@@ -317,6 +327,7 @@ const Dashboard = ({ session, onLogout }) => {
       "tree:cancelRequest",
       { requestId },
       (res) => {
+
         if (!res?.ok) alert(res?.error || "Could not cancel");
       }
     );
@@ -349,6 +360,7 @@ const Dashboard = ({ session, onLogout }) => {
     [treeSnapshot]
   );
 
+
   /* ids of everyone linked to me by any chain of relatives */
   const connected = useMemo(
     () =>
@@ -368,7 +380,7 @@ const Dashboard = ({ session, onLogout }) => {
       return getLabel(treeGraph, myPersonId, mId);
     }
 
-    return DEFAULT_RELATIONS[currentUser]?.[memberName] || "Not connected";
+    return "Not connected";
   };
 
   /* ---------- chat ---------- */
@@ -381,6 +393,7 @@ const Dashboard = ({ session, onLogout }) => {
             ((m.from === currentUser && m.to === activeContact) ||
               (m.from === activeContact && m.to === currentUser))
       ),
+
     [chatMessages, activeContact, activeGroup, currentUser]
   );
 
@@ -412,6 +425,7 @@ const Dashboard = ({ session, onLogout }) => {
       setUnread((u) => ({ ...u, [activeContact]: 0 }));
     }
   };
+
 
   const handleChatInput = (e) => {
     setChatText(e.target.value);
@@ -445,6 +459,7 @@ const Dashboard = ({ session, onLogout }) => {
   };
 
   /* the image picked from the file dialog (checked again by the server) */
+
   const pickImage = (e) => {
     const file = e.target.files?.[0];
     e.target.value = ""; // so the same file can be picked again
@@ -477,6 +492,7 @@ const Dashboard = ({ session, onLogout }) => {
         payload.image = {
           data: await pendingImage.file.arrayBuffer(), // sent as binary
           type: pendingImage.file.type,
+
         };
       } catch {
         setSending(false);
@@ -509,6 +525,7 @@ const Dashboard = ({ session, onLogout }) => {
     );
 
   const closeGroupModal = () => {
+
     setShowGroupModal(false);
     setGroupName("");
     setGroupPick([]);
@@ -541,6 +558,7 @@ const Dashboard = ({ session, onLogout }) => {
   const deleteChatMessage = (id) => {
     const socket = socketRef.current;
     if (!socket) return;
+
     if (!window.confirm("Delete this message for everyone?")) return;
     socket.emit("message:delete", { id }, (res) => {
       if (!res?.ok) alert(res?.error || "Could not delete message");
@@ -573,6 +591,7 @@ const Dashboard = ({ session, onLogout }) => {
             visibleGroups={visibleGroups}
             visibleContacts={visibleContacts}
             activeContact={activeContact}
+
             activeGroup={activeGroup}
             unread={unread}
             onlineUsers={onlineUsers}
@@ -605,6 +624,7 @@ const Dashboard = ({ session, onLogout }) => {
             currentUser={currentUser}
             getMemberRelation={getMemberRelation}
             getMemberEmail={getMemberEmail}
+
             onlineUsers={onlineUsers}
             memberLimit={memberLimit}
             setMemberLimit={setMemberLimit}
@@ -637,6 +657,7 @@ const Dashboard = ({ session, onLogout }) => {
   const groupCandidates = members
     .filter(
       (m) =>
+
         m.name !== currentUser &&
         m.name.toLowerCase().includes(groupSearch.trim().toLowerCase())
     )
@@ -670,6 +691,7 @@ const Dashboard = ({ session, onLogout }) => {
         {renderPage()}
       </div>
 
+
       {showGroupModal && (
         <GroupModal
           groupName={groupName}
@@ -701,5 +723,6 @@ const Dashboard = ({ session, onLogout }) => {
     </div>
   );
 };
+
 
 export default Dashboard;

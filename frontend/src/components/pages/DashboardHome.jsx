@@ -1,11 +1,5 @@
 import React from "react";
-import { Users, Network, ChevronRight, CalendarDays, Plus } from "lucide-react";
-
-const recentActivities = [
-    { name: "Robert", text: "Robert uploaded 5 photos from Easter Sunday", time: "2 hours ago", avatar: "👨🏻" },
-    { name: "Linda",  text: "Linda added a new tradition: Sunday Morning Pancakes", time: "Yesterday", avatar: "👩🏻" },
-    { name: "Mike",   text: "Mike shared a new document: Family Tree Chart", time: "3 days ago", avatar: "👦🏻" },
-];
+import { Users, Network, ChevronRight } from "lucide-react";
 
 const DashboardHome = ({
   currentUser,
@@ -36,6 +30,7 @@ const DashboardHome = ({
           <h2>{connectionCount}</h2>
           <p>Relationships tracked</p>
         </div>
+
       </section>
 
       <section className="activity-section">
@@ -46,37 +41,17 @@ const DashboardHome = ({
           </button>
         </div>
         <div className="activity-list">
-          {recentActivities.map((activity, index) => (
-            <div className="activity-item" key={index}>
-              <div className="activity-avatar">{activity.avatar}</div>
-              <div className="activity-info">
-                <p>{activity.text}</p>
-                <span>{activity.time}</span>
-              </div>
+          <div className="activity-item">
+            <div className="activity-avatar">{currentUserAvatar}</div>
+            <div className="activity-info">
+              <p>
+                {memberCount > 1
+                  ? "Open your tree to see your family and send messages."
+                  : "Nothing here yet. Open the Tree page and add your first relative."}
+              </p>
+              <span>Just now</span>
             </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="birthday-card">
-        <div className="birthday-date">
-          <CalendarDays size={20} />
-          <span>MAY</span><strong>15</strong><small>2026</small>
-        </div>
-        <div className="birthday-content">
-          <div className="birthday-top">
-            <div className="birthday-label"><CalendarDays size={15} />Birthday</div>
-            <span>5 days</span>
           </div>
-          <h2>Uncle James turns 65</h2>
-          <p>Create an event, invite family members and surprise uncle James</p>
-          <button
-            type="button"
-            className="create-event-btn"
-            onClick={() => alert("Birthday event created!")}
-          >
-            <Plus size={17} /> Create Event
-          </button>
         </div>
       </section>
     </main>

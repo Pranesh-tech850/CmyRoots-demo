@@ -53,8 +53,7 @@ const RELATIONS = {
 };
 
 /* Genders of the demo family members */
-const SEED_GENDER = { sarah: "F", robert: "M", linda: "F", mike: "M" };
-const SEED_NAMES = ["Sarah", "Robert", "Linda", "Mike"];
+
 
 /* ---------- helpers ---------- */
 
@@ -227,12 +226,12 @@ function ensureUser(username) {
       id,
       name,
       email: defaultEmail(name),
-      gender: SEED_GENDER[norm(name)] || null,
+      gender: null,
     };
   }).ok;
 }
 
-SEED_NAMES.forEach(ensureUser);
+
 
 function seedDefaultRelationships() {
   if (state.relationships && state.relationships.length > 0) return;
@@ -408,6 +407,55 @@ function syncMembers(members) {
     return null;
   });
 }
+
+/* Remove people from the tree completely (used to delete the old demo members):
+   their relationships and requests go too, and left-over strangers are pruned. */
+function removeMembers(names) {
+  const ids = new Set((names || []).map((n) => `user:${norm(n)}`));
+  if (![...ids].some((id) => state.persons[id])) return { ok: true }; // nothing to do
+  return commit((s) => {
+    ids.forEach((id) => delete s.persons[id]);
+    s.relationships = s.relationships.filter((r) => !ids.has(r.a) && !ids.has(r.b));
+    s.requests = (s.requests || []).filter(
+      (q) => !ids.has(q.fromId) && !ids.has(q.toId) && !ids.has(q.subjectId)
+    );
+    prune(s);
+    return null;
+  });
+}
+
+/* The names of every ACCOUNT linked to `username` through any chain of relatives
+   (including the person themself). Used so each member only sees their own family. */
+function getConnectedNames(username) {
+  const start = `user:${norm(username)}`;
+  if (!state.persons[start]) return [cleanName(username)];
+
+  const adj = new Map();
+  const link = (x, y) => {
+    if (!adj.has(x)) adj.set(x, []);
+    adj.get(x).push(y);
+  };
+  state.relationships.forEach((r) => {
+    link(r.a, r.b);
+    link(r.b, r.a);
+  });
+
+
+  const seen = new Set([start]);
+  const queue = [start];
+  while (queue.length) {
+    for (const n of adj.get(queue.shift()) || []) {
+      if (!seen.has(n)) {
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+  }
+  return [...seen]
+    .filter((id) => isUserId(id) && state.persons[id])
+    .map((id) => state.persons[id].name);
+}
+
 
 function setEmail({ personId, email }) {
   return commit((s) => {
@@ -904,4 +952,6 @@ module.exports = {
   registerTreeRoutes,
   syncMembers,
   getSnapshot: snapshot,
+  removeMembers,
+  getConnectedNames,
 };
