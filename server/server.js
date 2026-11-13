@@ -200,7 +200,7 @@ app.get(
 
 // These are separate email-invitation token routes.
 // They are intentionally not protected by login sessions.
-registerTreeRoutes(app, io);
+registerTreeRoutes(app, io, requireAuth);
 
 
 /* =========================================================
@@ -240,6 +240,7 @@ io.use(async (socket, next) => {
     // Attach authenticated account information.
     socket.username = session.username;
     socket.userId = session.user_id;
+    socket.email = session.email;
     socket.sessionId = session.session_id;
 
     return next();

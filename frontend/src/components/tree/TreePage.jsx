@@ -7,6 +7,7 @@ import "@xyflow/react/dist/style.css";
 import { User, UserPlus, Trash2 } from "lucide-react";
 
 import Swal from "sweetalert2";
+import { SOCKET_URL } from "../constant";
 
 
 
@@ -32,7 +33,7 @@ const edgeStyle = { stroke: "#9ca3af", strokeWidth: 1.5 };
 
 
 
-const TreePage = ({ socket, currentUser }) => {
+const TreePage = ({ socket, currentUser, requestToken }) => {
 
   const [snapshot, setSnapshot] = useState({
 
@@ -79,6 +80,58 @@ const TreePage = ({ socket, currentUser }) => {
   }, [socket]);
 
 
+
+  // An invitation link keeps its token in the URL through login/signup.
+  // Once this page is mounted, verify the logged-in email and ask for an explicit decision.
+  useEffect(() => {
+    if (!requestToken) return;
+    let cancelled = false;
+    const runInvitation = async () => {
+      try {
+        const response = await fetch(`${SOCKET_URL}/api/tree/request/${encodeURIComponent(requestToken)}`, {
+          credentials: "include",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load this invitation");
+        if (cancelled) return;
+        const request = data.request;
+        const decision = await Swal.fire({
+          title: "Family invitation",
+          html: `<p><b>${String(request.fromName || "A member").replace(/[&<>"']/g, "")}</b> says you are <b>${String(request.subjectName || "their family member").replace(/[&<>"']/g, "")}'s ${String(request.relation || "relative").replace(/[&<>"']/g, "")}</b>.</p><p>Would you like to add this connection to your family tree?</p>`,
+          showCancelButton: true,
+          showDenyButton: true,
+          confirmButtonText: "Accept",
+          denyButtonText: "Reject",
+          cancelButtonText: "Decide later",
+          confirmButtonColor: "#15803d",
+          denyButtonColor: "#b91c1c",
+        });
+        if (cancelled || decision.isDismissed) return;
+        const action = decision.isConfirmed ? "accept" : "reject";
+        const result = await fetch(`${SOCKET_URL}/api/tree/request/${encodeURIComponent(requestToken)}/${action}`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        });
+        const resultData = await result.json().catch(() => ({}));
+        if (!result.ok) throw new Error(resultData.error || "Could not respond to invitation");
+        await Swal.fire({
+          icon: action === "accept" ? "success" : "info",
+          title: action === "accept" ? "Relationship added" : "Invitation rejected",
+          text: action === "accept" ? "Your family tree has been updated." : "No relationship was added.",
+        });
+        const url = new URL(window.location.href);
+        url.searchParams.delete("token");
+        window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+      } catch (error) {
+        if (!cancelled) {
+          await Swal.fire({ icon: "error", title: "Invitation unavailable", text: error.message });
+        }
+      }
+    };
+    runInvitation();
+    return () => { cancelled = true; };
+  }, [requestToken]);
 
   const [showAddRelative, setShowAddRelative] = useState(false);
 
@@ -426,234 +479,178 @@ const TreePage = ({ socket, currentUser }) => {
 
 
 
-  const handleModalSubmit = () => {
-
-    if (!socket || !activeId) {
-
-      showMessage(
-        "Connection Error",
-        "You are not connected to the server yet. Please try again.",
-        "error"
-      );
-
-      return;
-
-    }
-
-
-
-    const isDirect = modalMode === "direct";
-
-    /* the person the new relative belongs to */
-
-    const owner = isDirect ? activeId : viewerId;
-
-    const target = resolveRelation(owner);
-
-    if (target.error) {
-    showMessage("Invalid Relationship", target.error, "warning");
+ 
+const handleModalSubmit = () => {
+  if (!socket || !activeId) {
+    showMessage(
+      "Connection Error",
+      "You are not connected to the server. Please try again.",
+      "error"
+    );
     return;
   }
 
+  const isDirect = modalMode === "direct";
+  const owner = isDirect ? activeId : viewerId;
 
+  const target = resolveRelation(owner);
 
-    if (isDirect) {
+  if (target.error) {
+    showMessage(
+      "Invalid Relationship",
+      target.error,
+      "warning"
+    );
+    return;
+  }
 
-      /* ---- email given: look the person up and send a request ---- */
+  // CASE 1: Adding a new person through an empty family-tree slot.
+  if (isDirect) {
+    const name = relativeName.trim();
+    const email = relativeEmail.trim().toLowerCase();
 
-      if (relativeEmail.trim()) {
-
-        const email = relativeEmail.trim().toLowerCase();
-       const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-        if (!regex.test(email)) {
-
-          showMessage("Invalid Email", "Please enter a valid email address.", "warning");
-        return;
-
-        }
-
-        const me = snapshot.persons.find((p) => p.id === viewerId);
-
-        if (me?.email && me.email.toLowerCase() === email) {
-
-          showMessage("Invalid Email", "That is your own email address.", "warning");
-        return;
-
-        }
-
-        socket.emit(
-
-          "tree:sendRequest",
-
-          {
-
-            subjectId: target.subjectId,
-
-            toEmail: email,
-
-            toName: relativeName.trim() || undefined,
-
-            relation: target.relation,
-
-          },
-
-          (res) => {
-
-            if (!res?.ok) {
-              showMessage("Request Failed", res?.error || "Could not send the request.", "error");
-              return;
-            }
-            showMessage(
-              "Request Sent",
-              `Request emailed to ${email}: you asked them to be ${whose(owner)} ${selectedRelation}. It will appear on the tree after they accept.`,
-              "success"
-            );
-
-            closeAddModal();
-
-          }
-
-        );
-
-        return;
-
-      }
-
-
-
-      if (!relativeName.trim()) {
-
-        showMessage(
-        "Missing Details",
-        "Please enter an email address or a family member name.",
+    if (!name) {
+      showMessage(
+        "Name Required",
+        "Please enter the family member's name.",
         "warning"
       );
       return;
-
-      }
-
-
-
-      /* the name belongs to a registered user -> needs THEIR approval */
-
-      const registered = snapshot.persons.find(
-
-        (p) => p.id.startsWith("user:") && normName(p.name) === normName(relativeName)
-
-      );
-
-      if (registered) {
-
-        if (registered.id === viewerId) {
-
-          showMessage("Invalid Request", "You can't send a request to yourself.", "warning");
-        return;
-
-        }
-
-        if (registered.id === target.subjectId) {
-
-          showMessage("Invalid Relationship", "A person can't be related to themselves.", "warning");
-        return;
-
-        }
-
-        socket.emit(
-
-          "tree:sendRequest",
-
-          { subjectId: target.subjectId, toId: registered.id, relation: target.relation },
-
-          (res) => {
-
-            if (!res?.ok) {
-              showMessage("Request Failed", res?.error || "Could not send the request.", "error");
-              return;
-            }
-            showMessage(
-              "Request Sent",
-              `Request sent: you asked ${registered.name} to be ${whose(owner)} ${selectedRelation}. Waiting for them to accept.`,
-              "success"
-            );
-
-            closeAddModal();
-
-          }
-
-        );
-
-        return;
-
-      }
-
-
-
-      /* no account -> add directly, no approval needed */
-
-      socket.emit(
-
-        "tree:addRelative",
-
-        { personId: target.subjectId, relation: target.relation, name: relativeName.trim() },
-
-        (res) => {
-
-          if (!res?.ok) {
-            showMessage("Could Not Add Relative", res?.error || "Could not add this family member.", "error");
-            return;
-          }
-          showMessage("Relative Added", "The family member was added successfully.", "success");
-          closeAddModal();
-
-        }
-
-      );
-
-      return;
-
     }
 
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-
-    /* ---- propose: "<selected person> is my <relation>" ---- */
-
-    if (activeId === viewerId) {
-
-      showMessage("Invalid Request", "You can't send a request to yourself.", "warning");
+    // Email is mandatory for both registered and anonymous recipients.
+    // Without an email, we cannot send an invitation.
+    if (!email) {
+      showMessage(
+        "Email Required",
+        "Please enter the recipient's email address. Even if they don't have a CmyRoots account, they can receive an invitation by email.",
+        "warning"
+      );
       return;
-
     }
 
+    if (!emailRegex.test(email)) {
+      showMessage(
+        "Invalid Email",
+        "Please enter a valid email address.",
+        "warning"
+      );
+      return;
+    }
 
+    const me = snapshot.persons.find(
+      (person) => person.id === viewerId
+    );
 
-    /* the server fills in fromId from the socket identity */
+    if (
+      me?.email &&
+      me.email.toLowerCase() === email
+    ) {
+      showMessage(
+        "Invalid Email",
+        "You cannot send an invitation to your own email address.",
+        "warning"
+      );
+      return;
+    }
 
+    const registered = snapshot.persons.find(
+      (person) =>
+        person.id.startsWith("user:") &&
+        (
+          person.email?.toLowerCase() === email ||
+          normName(person.name) === normName(name)
+        )
+    );
+
+    if (
+      registered &&
+      (
+        registered.id === viewerId ||
+        registered.id === target.subjectId
+      )
+    ) {
+      showMessage(
+        "Invalid Request",
+        "You cannot create a relationship with yourself.",
+        "warning"
+      );
+      return;
+    }
+
+    // Both registered and unregistered recipients use the same
+    // invitation workflow. The backend resolves the account by email.
     socket.emit(
-
       "tree:sendRequest",
-
-      { subjectId: target.subjectId, toId: activeId, relation: target.relation },
-
+      {
+        subjectId: target.subjectId,
+        toEmail: email,
+        toName: name,
+        relation: target.relation,
+      },
       (res) => {
-
         if (!res?.ok) {
-          showMessage("Request Failed", res?.error || "Could not send the request.", "error");
+          showMessage(
+            "Invitation Failed",
+            res?.error || "Could not send the invitation.",
+            "error"
+          );
           return;
         }
+
         showMessage(
-          "Request Sent",
-          `Request sent: you asked ${graph.byId[activeId]?.name || "them"} to be your ${selectedRelation}. Waiting for them to accept.`,
+          "Invitation Sent",
+          `An invitation has been sent to ${email}. The relationship will appear only after the recipient signs in and accepts.`,
           "success"
         );
 
         closeAddModal();
-
       }
-
     );
 
-  };
+    return;
+  }
+
+  // CASE 2: Proposing a relationship to an existing family-tree user.
+  if (activeId === viewerId) {
+    showMessage(
+      "Invalid Request",
+      "You cannot send a relationship request to yourself.",
+      "warning"
+    );
+    return;
+  }
+
+  socket.emit(
+    "tree:sendRequest",
+    {
+      subjectId: target.subjectId,
+      toId: activeId,
+      relation: target.relation,
+    },
+    (res) => {
+      if (!res?.ok) {
+        showMessage(
+          "Request Failed",
+          res?.error || "Could not send the request.",
+          "error"
+        );
+        return;
+      }
+
+      showMessage(
+        "Request Sent",
+        `Your relationship request has been sent to ${graph.byId[activeId]?.name || "the selected person"}. The tree will update after they accept.`,
+        "success"
+      );
+
+      closeAddModal();
+    }
+  );
+};
+
 
 
 

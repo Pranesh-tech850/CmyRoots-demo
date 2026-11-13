@@ -23,7 +23,7 @@ import RequestPopup from "./modals/RequestPopup";
 import OutgoingRequests from "./modals/OutgoingRequests";
 import MyProfilePage from "./pages/MyProfilePage";
 
-const Dashboard = ({ session, onLogout }) => {
+const Dashboard = ({ session, onLogout, requestToken }) => {
   /* who is logged in (verified by the server with the login token) */
   const currentUser = session.user.name;
 
@@ -50,7 +50,7 @@ const Dashboard = ({ session, onLogout }) => {
   );
 
   /* ---------- state ---------- */
-  const [activePage, setActivePage] = useState("dashboard");
+  const [activePage, setActivePage] = useState(() => requestToken ? "tree" : "dashboard");
 
   const [chatMessages, setChatMessages] = useState([]);
   const [groups, setGroups] = useState([]); // group chats I belong to
@@ -602,7 +602,7 @@ useEffect(() => {
   const renderPage = () => {
     switch (activePage) {
       case "tree":
-        return <TreePage socket={treeSocket} currentUser={currentUser} />;
+        return <TreePage socket={treeSocket} currentUser={currentUser} requestToken={requestToken} />;
       case "messages":
         return (
           <MessagesPage
