@@ -1,5 +1,5 @@
 {
-  "version": 182,
+  "version": 187,
   "persons": {
     "user:sarah": {
       "id": "user:sarah",
@@ -112,28 +112,16 @@
       "b": "user:sarah"
     },
     {
-      "id": "parent:user:surabi>user:pranesh mb",
-      "type": "parent",
-      "a": "user:surabi",
-      "b": "user:pranesh mb"
-    },
-    {
-      "id": "sibling:user:harshi|user:pranesh mb",
-      "type": "sibling",
-      "a": "user:harshi",
-      "b": "user:pranesh mb"
-    },
-    {
-      "id": "parent:user:surabi>user:harshi",
-      "type": "parent",
-      "a": "user:surabi",
-      "b": "user:harshi"
-    },
-    {
       "id": "parent:user:pranesh>user:priya",
       "type": "parent",
       "a": "user:pranesh",
       "b": "user:priya"
+    },
+    {
+      "id": "parent:user:pranesh mb>user:surabi",
+      "type": "parent",
+      "a": "user:pranesh mb",
+      "b": "user:surabi"
     }
   ],
   "requests": [
@@ -469,6 +457,19 @@
       "status": "accepted",
       "createdAt": 1794563456729,
       "expiresAt": 1795168256729
+    },
+    {
+      "id": "req_173fb7b1-79ad-47d8-bb3b-c57392cb0335",
+      "token": "477702ec070abb2362abd567fe3b0abfd1d4428a89cdd642",
+      "fromId": "user:surabi",
+      "subjectId": "user:surabi",
+      "toId": "user:pranesh mb",
+      "toEmail": "praneshmb4@gmail.com",
+      "toName": "Pranesh Mb",
+      "relation": "Father",
+      "status": "accepted",
+      "createdAt": 1794565136800,
+      "expiresAt": 1795169936800
     }
   ]
 }

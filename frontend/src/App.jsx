@@ -1,81 +1,90 @@
+
 import React, { useState, useEffect, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 
 import Dashboard from "./components/Dashboard";
 import AuthPage from "./components/auth/AuthPage";
-import {
-  loadSession,
-  saveSession,
-  clearSession,
-  SESSION_KEY,
-} from "./components/auth/session";
-import { checkSession } from "./components/auth/authapi";
+import { checkSession, logout } from "./components/auth/authapi";
 
 function App() {
-  const [session, setSession] = useState(loadSession);
-  /* when a saved login exists, confirm with the server that it is still valid */
-  const [checking, setChecking] = useState(() => Boolean(loadSession()));
+  const [session, setSession] = useState(null);
+  const [checking, setChecking] = useState(true);
 
+  // Read the relationship request token from the email link.
+  const requestToken = new URLSearchParams(
+    window.location.search
+  ).get("token");
+
+  // Restore the logged-in user using the HttpOnly cookie.
   useEffect(() => {
-    const saved = loadSession();
-    if (!saved) return;
-
     let cancelled = false;
-    checkSession(saved.token).then((res) => {
-      if (cancelled) return;
-      if (res.status === "invalid") {
-        clearSession();
-        setSession(null);
+
+    const restoreSession = async () => {
+      try {
+        const res = await checkSession();
+
+        if (cancelled) return;
+
+        if (res.status === "success" && res.user) {
+          setSession({ user: res.user });
+        } else {
+          setSession(null);
+        }
+      } catch (err) {
+        console.error("Could not restore session:", err);
+        if (!cancelled) setSession(null);
+      } finally {
+        if (!cancelled) setChecking(false);
       }
-      /* "offline": keep the saved login, the dashboard will reconnect later */
-      setChecking(false);
-    });
+    };
+
+    restoreSession();
 
     return () => {
       cancelled = true;
     };
   }, []);
 
-  /* Same browser, several tabs: when another tab logs in or out (and this tab uses
-     the remembered login), follow it, so one browser always shows ONE user.
-     A different browser has its own storage, so it can be another user. */
-  useEffect(() => {
-    const onStorage = (e) => {
-      if (e.key !== SESSION_KEY && e.key !== null) return;
-      if (sessionStorage.getItem(SESSION_KEY)) return; // this tab has its own "no remember" login
-      const latest = loadSession();
-      setSession((current) =>
-        current?.token === latest?.token ? current : latest
-      );
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+  // Login or signup succeeded.
+  const handleAuthenticated = useCallback((user) => {
+    setSession({ user });
   }, []);
 
-  const handleAuthenticated = useCallback((newSession, remember) => {
-    saveSession(newSession, remember);
-    setSession(newSession);
-  }, []);
-
-  const handleLogout = useCallback(() => {
-    clearSession();
+  // Logout from the backend and clear React state.
+const handleLogout = useCallback(async () => {
+  try {
+    await logout();
     setSession(null);
-  }, []);
+  } catch (err) {
+    console.error("Logout request failed:", err);
+    alert("Unable to log out. Please try again.");
+  }
+}, []);
 
   if (checking) {
-
     return (
       <div className="auth-splash">
         <div>
-          <Loader2 size={20} className="auth-spin" /> Loading your family...
+          <Loader2 size={20} className="auth-spin" />
+          Loading your family...
         </div>
       </div>
     );
   }
 
-  if (!session) return <AuthPage onAuthenticated={handleAuthenticated} />;
+  if (!session) {
+    return (
+      <AuthPage onAuthenticated={handleAuthenticated} />
+    );
+  }
 
-  return <Dashboard session={session} onLogout={handleLogout} />;
+  return (
+    <Dashboard
+      session={session}
+      onLogout={handleLogout}
+      requestToken={requestToken}
+    />
+  );
 }
 
 export default App;

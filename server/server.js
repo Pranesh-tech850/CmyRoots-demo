@@ -1,14 +1,13 @@
+
 // server/server.js
-// Setup:  npm init -y && npm i express socket.io cors nodemailer dotenv pg jsonwebtoken
-// Run:    node server.js
-require("dotenv").config(); // loads server/.env (DATABASE_URL, SMTP settings, JWT_SECRET)
+require("dotenv").config();
 
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
 
-// Family tree: relationship logic, persistence, real-time sync, email links
+// Family tree
 const {
   registerTreeHandlers,
   registerTreeRoutes,
@@ -16,12 +15,16 @@ const {
   getSnapshot,
   removeMembers,
   getConnectedNames,
-} = require("./familyTree");
+} = require("./familyTree.js");
 
-// Login / sign up (passwords + tokens)
-const { registerAuthRoutes, requireAuth, verifyToken } = require("./auth");
+// Cookie-based authentication
+const {
+  registerAuthRoutes,
+  requireAuth,
+  getCookieToken,
+} = require("./auth");
 
-// Chat messages are stored in PostgreSQL (database: chat_app)
+// PostgreSQL
 const {
   initDb,
   getHistory,
@@ -34,156 +37,379 @@ const {
   getGroupMembers,
   createGroup,
   leaveGroup,
-  findAccount,
+  findSession,
   removeDemoAccounts,
 } = require("./db");
 
-// Chat images are saved on disk (server/uploads), only their URL goes in PostgreSQL
-const { UPLOAD_DIR, MAX_IMAGE_BYTES, saveImage, removeImage } = require("./uploads");
+// Uploads
+const {
+  UPLOAD_DIR,
+  MAX_IMAGE_BYTES,
+  saveImage,
+  removeImage,
+} = require("./uploads");
+
+
+/* =========================================================
+   EXPRESS CONFIGURATION
+========================================================= */
 
 const app = express();
-app.use(cors());
 
-// Serve the saved chat images. The file names are long random strings.
+const FRONTEND_URL =
+  process.env.FRONTEND_URL || "http://localhost:5173";
+
+app.use(
+  cors({
+    origin: FRONTEND_URL,
+    credentials: true,
+    methods: [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ],
+  })
+);
+
+app.use(express.json());
+
+
+// Static image uploads
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, {
     maxAge: "365d",
     immutable: true,
     index: false,
-    setHeaders: (res) => res.setHeader("X-Content-Type-Options", "nosniff"),
+    setHeaders: (res) =>
+      res.setHeader("X-Content-Type-Options", "nosniff"),
   })
 );
 
+
+// Health check
 app.get("/", (req, res) => {
-  res.json({ status: "ok", service: "CmyRoots server running on port 4000" });
+  res.json({
+    status: "ok",
+    service: "CmyRoots server running",
+  });
 });
+
+
+/* =========================================================
+   HTTP SERVER AND SOCKET.IO
+========================================================= */
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  // room for one image (max 5 MB) plus a little extra
   maxHttpBufferSize: MAX_IMAGE_BYTES + 512 * 1024,
+
   cors: {
-    origin: "*",
+    origin: FRONTEND_URL,
+    credentials: true,
     methods: ["GET", "POST"],
   },
 });
 
-// Login, sign up, "who am I". A new member also becomes a person in the family tree.
+
+/* =========================================================
+   AUTHENTICATION ROUTES
+========================================================= */
+
 registerAuthRoutes(app, {
+
+  // Runs after a new account is created.
   onNewMember: async (user) => {
-    syncMembers([{ name: user.username, email: user.email, gender: user.gender }]);
+    syncMembers([
+      {
+        name: user.username,
+        email: user.email,
+        gender: user.gender,
+      },
+    ]);
+
     io.emit("tree:state", getSnapshot());
   },
+
+
+  // Runs after a user logs out.
+  onLogout: async (session) => {
+    const sockets = await io.fetchSockets();
+
+    for (const socket of sockets) {
+      // Disconnect only the socket belonging to this session.
+      if (socket.sessionId === session.session_id) {
+        socket.disconnect(true);
+      }
+    }
+
+    console.log(
+      `User session ${session.session_id} logged out`
+    );
+  },
+
 });
 
-// The member list for the logged-in person: THEMSELVES + the members linked to them
-// in their family tree. Nobody else's name or email is sent.
-app.get("/api/members", requireAuth, async (req, res) => {
-  try {
-    const mine = new Set(getConnectedNames(req.username).map((n) => n.toLowerCase()));
-    mine.add(req.username.toLowerCase());
-    const all = await listMembers();
-    res.json(all.filter((m) => mine.has(m.name.toLowerCase())));
-  } catch (err) {
-    console.error("🐘 could not load members:", err.message);
-    res.status(500).json({ error: "Could not load members" });
+
+/* =========================================================
+   MEMBERS API
+========================================================= */
+
+app.get(
+  "/api/members",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const mine = new Set(
+        getConnectedNames(req.username).map(
+          (name) => name.toLowerCase()
+        )
+      );
+
+      mine.add(req.username.toLowerCase());
+
+      const all = await listMembers();
+
+      res.json(
+        all.filter((member) =>
+          mine.has(member.name.toLowerCase())
+        )
+      );
+
+    } catch (err) {
+      console.error(
+        "🐘 could not load members:",
+        err.message
+      );
+
+      res.status(500).json({
+        error: "Could not load members",
+      });
+    }
   }
-});
+);
 
-// Pages opened from the request email: /request/:token (+ accept / reject)
+
+/* =========================================================
+   FAMILY TREE REQUEST ROUTES
+========================================================= */
+
+// These are separate email-invitation token routes.
+// They are intentionally not protected by login sessions.
 registerTreeRoutes(app, io);
 
-const onlineCount = {}; // username -> number of open tabs/sockets
+
+/* =========================================================
+   ONLINE PRESENCE
+========================================================= */
+
+const onlineCount = {};
 
 const broadcastPresence = () => {
   io.emit("presence", Object.keys(onlineCount));
 };
 
-// Every connection must prove who it is with the token from login
+
+/* =========================================================
+   SOCKET.IO AUTHENTICATION
+   Validate HttpOnly session cookie using PostgreSQL
+========================================================= */
+
 io.use(async (socket, next) => {
   try {
-    const name = verifyToken(socket.handshake.auth?.token);
-    if (!name) return next(new Error("unauthorized"));
-    const account = await findAccount(name); // the account must still exist
-    if (!account) return next(new Error("unauthorized"));
-    socket.username = account.username; // exact spelling from the database
-    next();
-  } catch {
-    next(new Error("unauthorized"));
+    // Read cookie from Socket.IO handshake headers.
+    const token = getCookieToken({
+      headers: socket.handshake.headers,
+    });
+
+    if (!token) {
+      return next(new Error("unauthorized"));
+    }
+
+    // Validate session against PostgreSQL.
+    const session = await findSession(token);
+
+    if (!session) {
+      return next(new Error("unauthorized"));
+    }
+
+    // Attach authenticated account information.
+    socket.username = session.username;
+    socket.userId = session.user_id;
+    socket.sessionId = session.session_id;
+
+    return next();
+
+  } catch (err) {
+    console.error(
+      "Socket authentication failed:",
+      err.message
+    );
+
+    return next(new Error("unauthorized"));
   }
 });
+
+
+/* =========================================================
+   SOCKET.IO CONNECTION
+========================================================= */
 
 io.on("connection", (socket) => {
   const { username } = socket;
 
-  // Personal room: lets us reach a user in ALL of their tabs/devices
+  // Private user room.
   socket.join(`user:${username}`);
-  onlineCount[username] = (onlineCount[username] || 0) + 1;
+
+  // Session-specific room.
+  socket.join(`session:${socket.sessionId}`);
+
+  // Update online count.
+  onlineCount[username] =
+    (onlineCount[username] || 0) + 1;
+
   broadcastPresence();
 
-  // Family tree events: tree:get, tree:addRelative, tree:sendRequest,
-  // tree:respondRequest, tree:cancelRequest, tree:setEmail, ...
+
+  /* -------------------------------------------------------
+     FAMILY TREE EVENTS
+  ------------------------------------------------------- */
+
   registerTreeHandlers(io, socket);
 
-  // Send this user their past conversations (loaded from PostgreSQL)
+
+  /* -------------------------------------------------------
+     CHAT HISTORY
+  ------------------------------------------------------- */
+
   getHistory(username)
-    .then((history) => socket.emit("history", history))
+    .then((history) => {
+      socket.emit("history", history);
+    })
     .catch((err) => {
-      console.error("🐘 could not load chat history:", err.message);
+      console.error(
+        "🐘 could not load chat history:",
+        err.message
+      );
+
       socket.emit("history", []);
     });
 
-  // The groups this user belongs to
+
+  /* -------------------------------------------------------
+     GROUP LIST
+  ------------------------------------------------------- */
+
   getGroupsFor(username)
-    .then((groups) => socket.emit("groups", groups))
+    .then((groups) => {
+      socket.emit("groups", groups);
+    })
     .catch((err) => {
-      console.error("🐘 could not load groups:", err.message);
+      console.error(
+        "🐘 could not load groups:",
+        err.message
+      );
+
       socket.emit("groups", []);
     });
 
-  const roomsOf = (names) => [...new Set(names)].map((n) => `user:${n}`);
 
-  // Send a message to ONE person ({ to }) or ONE group ({ groupId }).
-  // It can have text, an image ({ image: { data } }) or both.
-  // It is saved in PostgreSQL first, then delivered.
+  /* -------------------------------------------------------
+     ROOM HELPER
+  ------------------------------------------------------- */
+
+  const roomsOf = (names) =>
+    [...new Set(names)].map(
+      (name) => `user:${name}`
+    );
+
+
+  /* =======================================================
+     SEND PRIVATE OR GROUP MESSAGE
+  ======================================================= */
+
   socket.on("message:send", async (payload, ack) => {
-    const reply = (res) => typeof ack === "function" && ack(res);
+    const reply = (result) =>
+      typeof ack === "function" && ack(result);
+
     const { to, groupId, image } = payload || {};
-    // Array.from keeps emojis whole (a plain slice could cut one in half)
-    const text = Array.from(String((payload || {}).text || "").trim())
+
+    const text = Array.from(
+      String((payload || {}).text || "").trim()
+    )
       .slice(0, 2000)
       .join("");
 
     let imageUrl = null;
+
     try {
       if (Boolean(to) === Boolean(groupId)) {
-        return reply({ ok: false, error: "Choose one person or one group" });
+        return reply({
+          ok: false,
+          error: "Choose one person or one group",
+        });
       }
-      if (!text && !image) return reply({ ok: false, error: "Empty message" });
 
-      let recipients; // who gets "message:new"
-      let target = null; // the person (for a private message)
+      if (!text && !image) {
+        return reply({
+          ok: false,
+          error: "Empty message",
+        });
+      }
 
+      let recipients;
+      let target = null;
+
+
+      // Group message
       if (groupId) {
         const members = await getGroupMembers(groupId);
+
         if (!members.includes(username)) {
-          return reply({ ok: false, error: "You are not in this group" });
+          return reply({
+            ok: false,
+            error: "You are not in this group",
+          });
         }
+
         recipients = members;
+
       } else {
+
+        // Private message
         target = await findUser(to);
-        if (!target) return reply({ ok: false, error: "That member does not exist" });
+
+        if (!target) {
+          return reply({
+            ok: false,
+            error: "That member does not exist",
+          });
+        }
+
         recipients = [target, username];
       }
 
+
+      // Image upload
       if (image) {
         const saved = await saveImage(image.data);
-        if (saved.error) return reply({ ok: false, error: saved.error });
+
+        if (saved.error) {
+          return reply({
+            ok: false,
+            error: saved.error,
+          });
+        }
+
         imageUrl = saved.url;
       }
 
+
+      // Save message in PostgreSQL
       const message = await saveMessage({
         from: username,
         to: target,
@@ -192,146 +418,317 @@ io.on("connection", (socket) => {
         imageUrl,
       });
 
-      // everyone involved, including the sender's other tabs
-      io.to(roomsOf(recipients)).emit("message:new", message);
+
+      // Broadcast message
+      io.to(roomsOf(recipients)).emit(
+        "message:new",
+        message
+      );
+
       reply({ ok: true });
+
     } catch (err) {
-      if (imageUrl) removeImage(imageUrl); // don't keep a file with no message
-      console.error("🐘 could not save message:", err.message);
-      reply({ ok: false, error: "Could not save message" });
+      if (imageUrl) {
+        removeImage(imageUrl);
+      }
+
+      console.error(
+        "🐘 could not save message:",
+        err.message
+      );
+
+      reply({
+        ok: false,
+        error: "Could not save message",
+      });
     }
   });
 
-  // Create a group: { name, members: ["Mike", "Priya"] } (you are added automatically)
+
+  /* =======================================================
+     CREATE GROUP
+  ======================================================= */
+
   socket.on("group:create", async (payload, ack) => {
-    const reply = (res) => typeof ack === "function" && ack(res);
+    const reply = (result) =>
+      typeof ack === "function" && ack(result);
+
     try {
-      const name = Array.from(String((payload || {}).name || "").replace(/\s+/g, " ").trim())
+      const name = Array.from(
+        String((payload || {}).name || "")
+          .replace(/\s+/g, " ")
+          .trim()
+      )
         .slice(0, 60)
         .join("");
+
       const members = (payload || {}).members;
-      if (!name) return reply({ ok: false, error: "Please enter a group name" });
-      if (!Array.isArray(members)) return reply({ ok: false, error: "Choose the members" });
+
+      if (!name) {
+        return reply({
+          ok: false,
+          error: "Please enter a group name",
+        });
+      }
+
+      if (!Array.isArray(members)) {
+        return reply({
+          ok: false,
+          error: "Choose the members",
+        });
+      }
 
       const result = await createGroup({
         name,
         creator: username,
         members: members.slice(0, 200).map(String),
       });
-      if (result.error) return reply({ ok: false, error: result.error });
 
-      io.to(roomsOf(result.group.members)).emit("group:new", result.group);
-      reply({ ok: true, group: result.group });
+      if (result.error) {
+        return reply({
+          ok: false,
+          error: result.error,
+        });
+      }
+
+      io.to(roomsOf(result.group.members)).emit(
+        "group:new",
+        result.group
+      );
+
+      reply({
+        ok: true,
+        group: result.group,
+      });
+
     } catch (err) {
-      console.error("🐘 could not create group:", err.message);
-      reply({ ok: false, error: "Could not create group" });
+      console.error(
+        "🐘 could not create group:",
+        err.message
+      );
+
+      reply({
+        ok: false,
+        error: "Could not create group",
+      });
     }
   });
 
-  // Leave a group: { groupId }
+
+  /* =======================================================
+     LEAVE GROUP
+  ======================================================= */
+
   socket.on("group:leave", async (payload, ack) => {
-    const reply = (res) => typeof ack === "function" && ack(res);
+    const reply = (result) =>
+      typeof ack === "function" && ack(result);
+
     try {
       const groupId = (payload || {}).groupId;
-      const result = await leaveGroup({ groupId, username });
-      if (!result) return reply({ ok: false, error: "You are not in this group" });
 
-      result.images.forEach(removeImage); // the group was empty, so it was deleted
+      const result = await leaveGroup({
+        groupId,
+        username,
+      });
 
-      // all my tabs drop the group...
-      io.to(`user:${username}`).emit("group:left", { groupId: String(groupId) });
-      // ...and the others see the new member list
+      if (!result) {
+        return reply({
+          ok: false,
+          error: "You are not in this group",
+        });
+      }
+
+      result.images.forEach(removeImage);
+
+      io.to(`user:${username}`).emit("group:left", {
+        groupId: String(groupId),
+      });
+
       if (result.remaining.length) {
         const group = await getGroup(groupId);
-        io.to(roomsOf(result.remaining)).emit("group:updated", group);
+
+        io.to(roomsOf(result.remaining)).emit(
+          "group:updated",
+          group
+        );
       }
+
       reply({ ok: true });
+
     } catch (err) {
-      console.error("🐘 could not leave group:", err.message);
-      reply({ ok: false, error: "Could not leave group" });
+      console.error(
+        "🐘 could not leave group:",
+        err.message
+      );
+
+      reply({
+        ok: false,
+        error: "Could not leave group",
+      });
     }
   });
 
-  // Delete one of MY messages: remove it from PostgreSQL, then tell both people
+
+  /* =======================================================
+     DELETE OWN MESSAGE
+  ======================================================= */
+
   socket.on("message:delete", async ({ id } = {}, ack) => {
     try {
-      const deleted = await deleteMessage({ id, username });
+      const deleted = await deleteMessage({
+        id,
+        username,
+      });
 
       if (!deleted) {
         if (typeof ack === "function") {
-          ack({ ok: false, error: "Message not found, or it is not yours" });
+          ack({
+            ok: false,
+            error: "Message not found, or it is not yours",
+          });
         }
+
         return;
       }
 
-      if (deleted.imageUrl) removeImage(deleted.imageUrl); // delete the file too
+      if (deleted.imageUrl) {
+        removeImage(deleted.imageUrl);
+      }
 
-      // everyone in this chat (in all their tabs) removes it from the screen
       const people = deleted.groupId
-        ? [...(await getGroupMembers(deleted.groupId)), username]
+        ? [
+            ...(await getGroupMembers(deleted.groupId)),
+            username,
+          ]
         : [deleted.to, username];
-      io.to(roomsOf(people)).emit("message:deleted", { id: deleted.id });
 
-      if (typeof ack === "function") ack({ ok: true });
+      io.to(roomsOf(people)).emit(
+        "message:deleted",
+        {
+          id: deleted.id,
+        }
+      );
+
+      if (typeof ack === "function") {
+        ack({ ok: true });
+      }
+
     } catch (err) {
-      console.error("🐘 could not delete message:", err.message);
-      if (typeof ack === "function") ack({ ok: false, error: "Could not delete message" });
+      console.error(
+        "🐘 could not delete message:",
+        err.message
+      );
+
+      if (typeof ack === "function") {
+        ack({
+          ok: false,
+          error: "Could not delete message",
+        });
+      }
     }
   });
 
-  // Typing indicator
+
+  /* =======================================================
+     TYPING INDICATOR
+  ======================================================= */
+
   socket.on("typing", ({ to, isTyping }) => {
-    io.to(`user:${to}`).emit("typing", { from: username, isTyping });
+    io.to(`user:${to}`).emit("typing", {
+      from: username,
+      isTyping,
+    });
   });
+
+
+  /* =======================================================
+     DISCONNECT
+  ======================================================= */
 
   socket.on("disconnect", () => {
     onlineCount[username] -= 1;
-    if (onlineCount[username] <= 0) delete onlineCount[username];
-    broadcastPresence();
-  });
-});
 
-const PORT = 4000;
-
-// Start-up, in two clearly separated steps so an error says what really failed
-async function start() {
-  // 1. the database
-  try {
-    await initDb();
-  } catch (err) {
-    console.error(
-      "❌ Could not connect to PostgreSQL (database chat_app):",
-      err.message,
-      "\n   Check DATABASE_URL in server/.env and that PostgreSQL is running."
-    );
-    process.exit(1);
-  }
-
-  // 2. everything else
-  try {
-    // one-time clean-up of the old demo members (Sarah, Robert, Linda, Mike)
-    const demo = await removeDemoAccounts();
-    if (demo.names.length) {
-      removeMembers(demo.names);
-      demo.images.forEach(removeImage);
-      console.log(`🧹 removed old demo members: ${demo.names.join(", ")}`);
+    if (onlineCount[username] <= 0) {
+      delete onlineCount[username];
     }
 
-    // every member in the database also becomes a person in the family tree
-    const members = await listMembers();
-    syncMembers(members);
-    console.log(`👥 ${members.length} members loaded`);
+    broadcastPresence();
+  });
+
+});
+
+
+/* =========================================================
+   SERVER STARTUP
+========================================================= */
+
+const PORT = process.env.PORT || 4000;
+
+async function start() {
+  try {
+    await initDb();
+
   } catch (err) {
     console.error(
-      "❌ The database is fine, but start-up failed afterwards:",
+      "❌ Could not connect to PostgreSQL:",
       err.message,
-      "\n   If it says 'syncMembers is not a function', your familyTree.js is an old copy:",
-      "\n   replace it with the latest familyTree.js (it must export syncMembers)."
+      "\nCheck DATABASE_URL in server/.env and ensure PostgreSQL is running."
     );
+
     process.exit(1);
   }
 
-  server.listen(PORT, () => console.log(`Socket server running on :${PORT}`));
+
+  /* -------------------------------------------------------
+     REMOVE DEMO ACCOUNTS
+  ------------------------------------------------------- */
+
+  try {
+    const demo = await removeDemoAccounts();
+
+    if (demo.names.length) {
+      removeMembers(demo.names);
+
+      demo.images.forEach(removeImage);
+
+      console.log(
+        `🧹 removed old demo members: ${demo.names.join(", ")}`
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       LOAD EXISTING MEMBERS
+    ----------------------------------------------------- */
+
+    const members = await listMembers();
+
+    syncMembers(members);
+
+    console.log(
+      `👥 ${members.length} members loaded`
+    );
+
+  } catch (err) {
+    console.error(
+      "❌ Database startup operation failed:",
+      err.message,
+      "\nCheck familyTree.js and database configuration."
+    );
+
+    process.exit(1);
+  }
+
+
+  /* -------------------------------------------------------
+     START HTTP + SOCKET.IO SERVER
+  ------------------------------------------------------- */
+
+  server.listen(PORT, () => {
+    console.log(
+      `Socket server running on port ${PORT}`
+    );
+  });
 }
 
 start();

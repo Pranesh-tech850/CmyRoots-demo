@@ -111,14 +111,16 @@ const AuthPage = ({ onAuthenticated }) => {
     setBusy(true);
     try {
       const data = isSignup
-        ? await signup({
-            username: name.trim().replace(/\s+/g, " "),
-            email: email.trim(),
-            gender: gender || null,
-            password,
-          })
-        : await login(identifier.trim(), password);
-      onAuthenticated({ token: data.token, user: data.user }, remember);
+  ? await signup({
+      username: name.trim().replace(/\s+/g, " "),
+      email: email.trim(),
+      gender: gender || null,
+      password,
+      remember,
+    })
+  : await login(identifier.trim(), password, remember);
+
+onAuthenticated(data.user);
     } catch (err) {
       setServerError(err.message);
       setBusy(false);

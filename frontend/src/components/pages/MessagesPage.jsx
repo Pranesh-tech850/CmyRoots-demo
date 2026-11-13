@@ -47,9 +47,15 @@ const MessagesPage = ({
         <h1>Messages</h1>
         <p>
           You are chatting as <strong>{currentUser}</strong>{" · "}
-          <a href="#logout" onClick={(e) => { e.preventDefault(); logout(); }}>
-            log out
-          </a>
+          <a
+  href="#logout"
+  onClick={(e) => {
+    e.preventDefault();
+    logout();
+  }}
+>
+  log out
+</a>
         </p>
       </div>
     </div>

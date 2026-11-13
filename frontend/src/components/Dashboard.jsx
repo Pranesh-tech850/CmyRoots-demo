@@ -26,7 +26,7 @@ import MyProfilePage from "./pages/MyProfilePage";
 const Dashboard = ({ session, onLogout }) => {
   /* who is logged in (verified by the server with the login token) */
   const currentUser = session.user.name;
-  const token = session.token;
+
 
   /* ---------- members: ME + the people linked to me in my family tree ----------
      (the server sends only these; a brand-new account sees only itself) */
@@ -132,22 +132,31 @@ const Dashboard = ({ session, onLogout }) => {
   /* load my members, and again whenever my tree changes (a new relative accepted) */
 
   const treeVersion = treeSnapshot?.version;
-  useEffect(() => {
-    fetch(`${SOCKET_URL}/api/members`, {
-      headers: { Authorization: `Bearer ${token}` },
+useEffect(() => {
+  fetch(`${SOCKET_URL}/api/members`, {
+    credentials: "include",
+  })
+    .then((r) => {
+      if (r.status === 401) {
+        onLogout();
+        return null;
+      }
+
+      if (!r.ok) {
+        throw new Error("Could not load members");
+      }
+
+      return r.json();
     })
-      .then((r) => {
-        if (r.status === 401) {
-          onLogout(); // the login expired
-          return null;
-        }
-        return r.json();
-      })
-      .then((list) => {
-        if (Array.isArray(list) && list.length) setMembers(list);
-      })
-      .catch(() => {}); // keep the current list if the server is not reachable
-  }, [token, onLogout, treeVersion]);
+    .then((list) => {
+      if (Array.isArray(list) && list.length) {
+        setMembers(list);
+      }
+    })
+    .catch((err) => {
+      console.error("Could not fetch members:", err.message);
+    });
+}, [onLogout, treeVersion]);
 
   /* ---- global request state ---- */
   const [incomingRequest, setIncomingRequest] = useState(null);
@@ -171,91 +180,105 @@ const Dashboard = ({ session, onLogout }) => {
   }, [activePage]);
 
   /* ---------- socket connection ---------- */
-  useEffect(() => {
+useEffect(() => {
+  setTreeSocket(null);
+
+  console.log("→ creating cookie-authenticated socket for", currentUser);
+
+  const socket = io(SOCKET_URL, {
+    withCredentials: true,
+  });
+
+  socketRef.current = socket;
+  setTreeSocket(socket);
+
+  socket.on("connect", () => {
+    console.log("✅ socket connected as", currentUser, socket.id);
+  });
+
+ socket.on("connect_error", (err) => {
+  console.log("❌ socket error:", err.message);
+
+  if (err.message === "unauthorized") {
+    socket.disconnect();
+    onLogout();
+  }
+});
+
+  socket.on("disconnect", (reason) => {
+    console.log("🔌 socket disconnected:", reason);
+  });
+
+  socket.on("tree:state", (state) => setTreeSnapshot(state));
+
+  socket.emit("tree:get", (state) => {
+    if (state) setTreeSnapshot(state);
+  });
+
+  socket.on("history", (history) => setChatMessages(history));
+
+  socket.on("message:new", (msg) => {
+    setChatMessages((prev) => [...prev, msg]);
+    setTypingFrom((t) => ({ ...t, [msg.from]: false }));
+
+    const chatKey = msg.groupId ? `g:${msg.groupId}` : msg.from;
+
+    const chatIsOpen =
+      activePageRef.current === "messages" &&
+      activeContactRef.current === chatKey;
+
+    if (msg.from !== currentUser && !chatIsOpen) {
+      setUnread((u) => ({
+        ...u,
+        [chatKey]: (u[chatKey] || 0) + 1,
+      }));
+    }
+  });
+
+  // Group chats
+  socket.on("groups", (list) => setGroups(list));
+
+  socket.on("group:new", (g) =>
+    setGroups((prev) =>
+      prev.some((x) => x.id === g.id) ? prev : [...prev, g]
+    )
+  );
+
+  socket.on("group:updated", (g) =>
+    setGroups((prev) => prev.map((x) => (x.id === g.id ? g : x)))
+  );
+
+  socket.on("group:left", ({ groupId }) => {
+    setGroups((prev) => prev.filter((x) => x.id !== groupId));
+
+    setChatMessages((prev) =>
+      prev.filter((m) => m.groupId !== groupId)
+    );
+
+    setUnread((u) => {
+      const rest = { ...u };
+      delete rest[`g:${groupId}`];
+      return rest;
+    });
+  });
+
+  // Message deletion
+  socket.on("message:deleted", ({ id }) =>
+    setChatMessages((prev) => prev.filter((m) => m.id !== id))
+  );
+
+  socket.on("presence", (users) => setOnlineUsers(users));
+
+  socket.on("typing", ({ from, isTyping }) =>
+    setTypingFrom((t) => ({ ...t, [from]: isTyping }))
+  );
+
+  return () => {
+    socket.disconnect();
+    socketRef.current = null;
     setTreeSocket(null);
-
-    console.log("→ creating socket for", currentUser);
-    const socket = io(SOCKET_URL, {
-      auth: { token }, // the server reads who you are from the token
-    });
-
-    socketRef.current = socket;
-    setTreeSocket(socket);
-
-    socket.on("connect", () => {
-      console.log("✅ socket connected as", currentUser, socket.id);
-    });
-
-    socket.on("connect_error", (err) => {
-      console.log("❌ socket error:", err.message);
-      if (err.message === "unauthorized") onLogout(); // login expired or account removed
-    });
-
-    socket.on("disconnect", (reason) => {
-      console.log("🔌 socket disconnected:", reason);
-    });
-
-    socket.on("tree:state", (state) => setTreeSnapshot(state));
-
-
-    socket.emit("tree:get", (state) => {
-      if (state) setTreeSnapshot(state);
-    });
-
-    socket.on("history", (history) => setChatMessages(history));
-
-    socket.on("message:new", (msg) => {
-      setChatMessages((prev) => [...prev, msg]);
-      setTypingFrom((t) => ({ ...t, [msg.from]: false }));
-
-      /* which chat does this belong to: a group, or the person who wrote it */
-      const chatKey = msg.groupId ? `g:${msg.groupId}` : msg.from;
-
-      const chatIsOpen =
-        activePageRef.current === "messages" &&
-        activeContactRef.current === chatKey;
-
-      if (msg.from !== currentUser && !chatIsOpen) {
-        setUnread((u) => ({ ...u, [chatKey]: (u[chatKey] || 0) + 1 }));
-      }
-    });
-
-    /* ---- group chats ---- */
-    socket.on("groups", (list) => setGroups(list));
-    socket.on("group:new", (g) =>
-      setGroups((prev) => (prev.some((x) => x.id === g.id) ? prev : [...prev, g]))
-    );
-    socket.on("group:updated", (g) =>
-      setGroups((prev) => prev.map((x) => (x.id === g.id ? g : x)))
-    );
-    socket.on("group:left", ({ groupId }) => {
-
-      setGroups((prev) => prev.filter((x) => x.id !== groupId));
-      setChatMessages((prev) => prev.filter((m) => m.groupId !== groupId));
-      setUnread((u) => {
-        const rest = { ...u };
-        delete rest[`g:${groupId}`];
-        return rest;
-      });
-    });
-
-    /* a message was deleted (by me or by the other person's delete of their own) */
-    socket.on("message:deleted", ({ id }) =>
-      setChatMessages((prev) => prev.filter((m) => m.id !== id))
-    );
-
-    socket.on("presence", (users) => setOnlineUsers(users));
-
-    socket.on("typing", ({ from, isTyping }) =>
-      setTypingFrom((t) => ({ ...t, [from]: isTyping }))
-    );
-
-    return () => {
-      socket.disconnect();
-      socketRef.current = null;
-      setTreeSocket(null);
-    };
-  }, [token, currentUser, onLogout]);
+  };
+}, [currentUser, onLogout]);
 
   /* ---------- incoming / outgoing request handling ---------- */
 
