@@ -21,6 +21,7 @@ import SettingsPage from "./pages/SettingsPage";
 import GroupModal from "./modals/GroupModal";
 import RequestPopup from "./modals/RequestPopup";
 import OutgoingRequests from "./modals/OutgoingRequests";
+import MyProfilePage from "./pages/MyProfilePage";
 
 const Dashboard = ({ session, onLogout }) => {
   /* who is logged in (verified by the server with the login token) */
@@ -633,13 +634,21 @@ const Dashboard = ({ session, onLogout }) => {
         );
       case "settings":
         return (
-          <SettingsPage
-            currentUser={currentUser}
-            myEmail={myEmail}
-            emailInputRef={emailInputRef}
-            onSave={saveSettings}
-          />
+         <SettingsPage
+  currentUser={currentUser}
+  myEmail={myEmail}
+  onOpenProfile={() => setActivePage("my-profile")}
+  onCreateEvent={() => setActivePage("events")}
+/>
         );
+        case "my-profile":
+  return (
+    <MyProfilePage
+      currentUser={currentUser}
+      myEmail={myEmail}
+      onBack={() => handleNavigate("settings")}
+    />
+  );
       default:
         return (
           <DashboardHome

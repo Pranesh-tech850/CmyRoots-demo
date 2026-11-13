@@ -1,0 +1,276 @@
+
+/* Main Settings Page */
+
+.settings-page {
+  width: 100%;
+  min-height: 100%;
+  background: #ffffff;
+  color: #202020;
+  font-family: inherit;
+  padding: 28px 32px;
+  box-sizing: border-box;
+}
+
+/* Profile Header */
+
+.settings-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 18px 4px 28px;
+  border-bottom: 1px solid #eeeeee;
+  position: relative;
+}
+
+.settings-avatar-wrapper {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.settings-avatar {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.settings-avatar-placeholder {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #f3f3f3;
+  color: #777777;
+}
+
+.settings-camera-button {
+  position: absolute;
+  right: -5px;
+  bottom: 0;
+  width: 34px;
+  height: 34px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: #171717;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.settings-camera-button:hover {
+  background: #444444;
+}
+
+.settings-profile-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-profile-info h1 {
+  font-size: 27px;
+  font-weight: 500;
+  margin: 0 0 7px;
+  color: #202020;
+}
+
+.settings-profile-info p {
+  font-size: 17px;
+  color: #888888;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-premium-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid #e5e5e5;
+  border-radius: 30px;
+  background: #f8f8f8;
+  color: #555555;
+  font-size: 13px;
+}
+
+.settings-edit-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 24px;
+  background: #ffffff;
+  border: 1px solid #d9d9d9;
+  border-radius: 13px;
+  color: #333333;
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.settings-edit-button:hover {
+  background: #171717;
+  color: #ffffff;
+  border-color: #171717;
+}
+
+/* Navigation Sections */
+
+.settings-navigation-section {
+  padding: 30px 0 10px;
+}
+
+.settings-section-title {
+  font-size: 16px;
+  font-weight: 400;
+  color: #a0a0a0;
+  margin: 0 0 22px;
+}
+
+.settings-navigation-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 15px 4px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 12px;
+  transition: background 0.2s ease;
+}
+
+.settings-navigation-item:hover {
+  background: #f8f8f8;
+}
+
+.settings-item-icon {
+  width: 65px;
+  height: 65px;
+  min-width: 65px;
+  border-radius: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+  color: #555555;
+}
+
+.settings-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-item-content h3 {
+  font-size: 20px;
+  font-weight: 500;
+  color: #222222;
+  margin: 0 0 6px;
+}
+
+.settings-item-content p {
+  font-size: 15px;
+  color: #999999;
+  margin: 0;
+}
+
+.settings-chevron {
+  color: #999999;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.settings-navigation-item:hover .settings-chevron {
+  transform: translateX(4px);
+  color: #222222;
+}
+
+/* Responsive Design */
+
+@media (max-width: 768px) {
+  .settings-page {
+    padding: 20px 18px;
+  }
+
+  .settings-profile-header {
+    gap: 15px;
+  }
+
+  .settings-avatar {
+    width: 72px;
+    height: 72px;
+  }
+
+  .settings-profile-info h1 {
+    font-size: 21px;
+  }
+
+  .settings-profile-info p {
+    font-size: 14px;
+  }
+
+  .settings-edit-button {
+    padding: 9px 13px;
+    font-size: 13px;
+  }
+
+  .settings-navigation-item {
+    gap: 15px;
+  }
+
+  .settings-item-icon {
+    width: 55px;
+    height: 55px;
+    min-width: 55px;
+  }
+
+  .settings-item-content h3 {
+    font-size: 17px;
+  }
+
+  .settings-item-content p {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-page {
+    padding: 16px 12px;
+  }
+
+  .settings-profile-header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .settings-avatar {
+    width: 62px;
+    height: 62px;
+  }
+
+  .settings-profile-info {
+    flex: 1;
+  }
+
+  .settings-profile-info h1 {
+    font-size: 18px;
+  }
+
+  .settings-edit-button {
+    margin-left: auto;
+  }
+
+  .settings-navigation-section {
+    padding-top: 24px;
+  }
+
+  .settings-item-icon {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    border-radius: 13px;
+  }
+}
