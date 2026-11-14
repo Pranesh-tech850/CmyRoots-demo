@@ -19,11 +19,12 @@ import MessagesPage from "./pages/MessagesPage";
 import MembersPage from "./pages/MembersPage";
 import SettingsPage from "./pages/SettingsPage";
 import GroupModal from "./modals/GroupModal";
+import { notify, notifyError, notifySuccess, confirmDialog } from "./alerts";
 import RequestPopup from "./modals/RequestPopup";
 import OutgoingRequests from "./modals/OutgoingRequests";
 import MyProfilePage from "./pages/MyProfilePage";
 
-const Dashboard = ({ session, onLogout, requestToken }) => {
+const Dashboard = ({ session, onLogout, requestToken, onInviteDone }) => {
   /* who is logged in (verified by the server with the login token) */
   const currentUser = session.user.name;
 
@@ -305,11 +306,19 @@ useEffect(() => {
     if (!treeSnapshot || !currentUser) return;
     const myId = `user:${currentUser.toLowerCase()}`;
 
+    /* only requests that are still waiting for an answer */
+    const isPending = (r) =>
+      r.status === "pending" && (!r.expiresAt || r.expiresAt > Date.now());
+
     setOutgoingRequests(
-      (treeSnapshot.requests || []).filter((r) => r.fromId === myId)
+      (treeSnapshot.requests || []).filter(
+        (r) => r.fromId === myId && isPending(r)
+      )
     );
 
-    const inbox = (treeSnapshot.requests || []).filter((r) => r.toId === myId);
+    const inbox = (treeSnapshot.requests || []).filter(
+      (r) => r.toId === myId && isPending(r)
+    );
 
     setIncomingRequest((prev) => {
       /* keep the current popup while it is still pending */
@@ -339,7 +348,7 @@ useEffect(() => {
       "tree:respondRequest",
       { requestId: incomingRequest.id, accept },
       (res) => {
-        if (!res?.ok) alert(res?.error || "Could not respond");
+        if (!res?.ok) notifyError(res?.error || "Could not respond");
         /* popup closes by itself when tree:state arrives */
       }
     );
@@ -352,7 +361,7 @@ useEffect(() => {
       { requestId },
       (res) => {
 
-        if (!res?.ok) alert(res?.error || "Could not cancel");
+        if (!res?.ok) notifyError(res?.error || "Could not cancel");
       }
     );
   };
@@ -370,9 +379,9 @@ useEffect(() => {
 
   const saveSettings = () => {
     const email = emailInputRef.current?.value.trim();
-    if (!treeSocket) return alert("Not connected to the server yet");
+    if (!treeSocket) return notifyError("Not connected to the server yet");
     treeSocket.emit("tree:setEmail", { email }, (res) => {
-      alert(res?.ok ? "Settings saved successfully!" : res?.error || "Could not save");
+      res?.ok ? notifySuccess("Settings saved successfully!") : notifyError(res?.error || "Could not save");
     });
   };
 
@@ -489,9 +498,9 @@ useEffect(() => {
     e.target.value = ""; // so the same file can be picked again
     if (!file) return;
     if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
-      return alert("Please choose a PNG, JPG, GIF or WEBP image");
+      return notifyError("Please choose a PNG, JPG, GIF or WEBP image");
     }
-    if (file.size > MAX_IMAGE_BYTES) return alert("Image is too big (max 5 MB)");
+    if (file.size > MAX_IMAGE_BYTES) return notifyError("Image is too big (max 5 MB)");
     setPendingImage((prev) => {
       if (prev) URL.revokeObjectURL(prev.previewUrl);
       return { file, previewUrl: URL.createObjectURL(file) };
@@ -520,7 +529,7 @@ useEffect(() => {
         };
       } catch {
         setSending(false);
-        return alert("Could not read that image");
+        return notifyError("Could not read that image");
       }
     }
 
@@ -530,7 +539,7 @@ useEffect(() => {
     socket.emit("message:send", payload, (res) => {
       clearTimeout(failSafe);
       setSending(false);
-      if (!res?.ok) return alert(res?.error || "Could not send message");
+      if (!res?.ok) return notifyError(res?.error || "Could not send message");
       /* sent: now clear the box. The bubble appears when "message:new" arrives */
       setChatText("");
       clearPendingImage();
@@ -560,7 +569,7 @@ useEffect(() => {
     const socket = socketRef.current;
     if (!socket) return;
     socket.emit("group:create", { name: groupName, members: groupPick }, (res) => {
-      if (!res?.ok) return alert(res?.error || "Could not create group");
+      if (!res?.ok) return notifyError(res?.error || "Could not create group");
       setGroups((prev) =>
         prev.some((x) => x.id === res.group.id) ? prev : [...prev, res.group]
       );
@@ -569,23 +578,23 @@ useEffect(() => {
     });
   };
 
-  const leaveGroup = () => {
+  const leaveGroup = async () => {
     const socket = socketRef.current;
     if (!socket || !activeGroup) return;
-    if (!window.confirm(`Leave "${activeGroup.name}"? You will lose its messages.`)) return;
+    if (!(await confirmDialog("Leave group?", `Leave "${activeGroup.name}"? You will lose its messages.`, "Yes, leave"))) return;
     socket.emit("group:leave", { groupId: activeGroup.id }, (res) => {
-      if (!res?.ok) alert(res?.error || "Could not leave group");
+      if (!res?.ok) notifyError(res?.error || "Could not leave group");
       /* on success the server sends "group:left" and the group disappears */
     });
   };
 
-  const deleteChatMessage = (id) => {
+  const deleteChatMessage = async (id) => {
     const socket = socketRef.current;
     if (!socket) return;
 
-    if (!window.confirm("Delete this message for everyone?")) return;
+    if (!(await confirmDialog("Delete message?", "Delete this message for everyone?", "Yes, delete"))) return;
     socket.emit("message:delete", { id }, (res) => {
-      if (!res?.ok) alert(res?.error || "Could not delete message");
+      if (!res?.ok) notifyError(res?.error || "Could not delete message");
       /* on success the server sends "message:deleted" and the bubble disappears */
     });
   };
@@ -602,7 +611,7 @@ useEffect(() => {
   const renderPage = () => {
     switch (activePage) {
       case "tree":
-        return <TreePage socket={treeSocket} currentUser={currentUser} requestToken={requestToken} />;
+        return <TreePage socket={treeSocket} currentUser={currentUser} requestToken={requestToken} onInviteDone={onInviteDone} />;
       case "messages":
         return (
           <MessagesPage

@@ -33,7 +33,7 @@ const edgeStyle = { stroke: "#9ca3af", strokeWidth: 1.5 };
 
 
 
-const TreePage = ({ socket, currentUser, requestToken }) => {
+const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
 
   const [snapshot, setSnapshot] = useState({
 
@@ -86,6 +86,13 @@ const TreePage = ({ socket, currentUser, requestToken }) => {
   useEffect(() => {
     if (!requestToken) return;
     let cancelled = false;
+    // forget the token everywhere (address bar AND App state) so the popup never repeats
+    const clearTokenFromUrl = () => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("token");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+      if (typeof onInviteDone === "function") onInviteDone();
+    };
     const runInvitation = async () => {
       try {
         const response = await fetch(`${SOCKET_URL}/api/tree/request/${encodeURIComponent(requestToken)}`, {
@@ -119,13 +126,14 @@ const TreePage = ({ socket, currentUser, requestToken }) => {
           icon: action === "accept" ? "success" : "info",
           title: action === "accept" ? "Relationship added" : "Invitation rejected",
           text: action === "accept" ? "Your family tree has been updated." : "No relationship was added.",
+          confirmButtonColor: "#111",
         });
-        const url = new URL(window.location.href);
-        url.searchParams.delete("token");
-        window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+        // answered: only now forget the token (clearing earlier would cancel this effect)
+        clearTokenFromUrl();
       } catch (error) {
         if (!cancelled) {
-          await Swal.fire({ icon: "error", title: "Invitation unavailable", text: error.message });
+          await Swal.fire({ icon: "error", title: "Invitation unavailable", text: error.message, confirmButtonColor: "#111" });
+          clearTokenFromUrl();
         }
       }
     };

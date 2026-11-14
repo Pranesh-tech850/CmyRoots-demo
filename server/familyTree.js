@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { sendRequestEmail } = require('./mailer');
+const db = require('./db');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'family-tree.json');
@@ -81,6 +82,17 @@ function findByName(state, name) {
 function findByEmail(state, email) {
   const target = normEmail(email);
   return Object.values(state.persons).find(p => isUserId(p.id) && normEmail(p.email) === target);
+}
+
+// Real database check: does this email belong to a registered account (has a password)?
+async function accountFor(email) {
+  try {
+    const row = await db.findAccount(normEmail(email));
+    return row && row.password_hash ? row : null;
+  } catch (err) {
+    console.error('Account lookup failed:', err.message);
+    return null;
+  }
 }
 function isLive(r) { return r.status === 'pending' && (!r.expiresAt || r.expiresAt > Date.now()); }
 function publicSnapshot(state) {
@@ -173,7 +185,19 @@ function syncMembers(members = []) {
       const name = cleanName(member.name); const email = normEmail(member.email);
       if (!name || !isEmail(email)) continue;
       const id = userId(name); const old = s.persons[id];
-      s.persons[id] = { ...(old || {}), id, name, email, gender: member.gender || old?.gender || null };
+      // Someone accepted an invitation by email BEFORE having an account: a placeholder person
+      // was created for them. Merge it into this real account now.
+      const ph = Object.values(s.persons).find(p => !isUserId(p.id) && p.pendingEmail && normEmail(p.pendingEmail) === email);
+      s.persons[id] = { ...(old || {}), id, name, email, gender: member.gender || old?.gender || ph?.gender || null };
+      if (ph) {
+        const swap = x => (x === ph.id ? id : x);
+        const seen = new Set();
+        s.relationships = s.relationships
+          .map(rel => (rel.a === ph.id || rel.b === ph.id) ? makeRelationship(rel.type, swap(rel.a), swap(rel.b)) : rel)
+          .filter(rel => rel.a !== rel.b && !seen.has(rel.id) && seen.add(rel.id));
+        for (const r of s.requests) { r.fromId = swap(r.fromId); r.subjectId = swap(r.subjectId); if (r.toId) r.toId = swap(r.toId); if (r.toPersonId) r.toPersonId = swap(r.toPersonId); }
+        delete s.persons[ph.id];
+      }
       // Bind pending email invitations to the account after registration.
       for (const request of s.requests) {
         if (isLive(request) && !request.toId && normEmail(request.toEmail) === email) request.toId = id;
@@ -200,7 +224,7 @@ function getConnectedNames(username) {
 async function deliverInvitation(request, senderEmail) {
   const s = readState(); const sender = s.persons[request.fromId]; const subject = s.persons[request.subjectId];
   const link = `${FRONTEND_URL}/?token=${encodeURIComponent(request.token)}`;
-  return sendRequestEmail({ to: request.toEmail, toName: request.toName, fromName: sender?.name || 'A CmyRoots member', fromEmail: senderEmail || sender?.email || '', subjectName: subject?.name || null, relation: request.relation, link });
+  return sendRequestEmail({ to: request.toEmail, toName: request.toName, fromName: sender?.name || 'A CmyRoots member', fromEmail: senderEmail || sender?.email || '', subjectName: subject?.name || null, relation: request.relation, link, isRegistered: Boolean(await accountFor(request.toEmail)) });
 }
 
 function registerTreeHandlers(io, socket) {
@@ -266,7 +290,71 @@ function respondToRequest({ requestId, recipientId, email, accept }) {
     s.relationships.push(rel); r.status = 'accepted'; r.respondedAt = Date.now(); return null;
   });
 }
+// Accept / reject straight from the emailed link. NO login needed for people who already
+// have an account (the secret link only went to their email). Accepting REQUIRES an account.
+function respondByToken({ token, accept }) {
+  return commit(s => {
+    const r = s.requests.find(x => x.token === token && isLive(x));
+    if (!r) return 'This invitation is invalid, already answered, or expired';
+    if (!accept) { r.status = 'rejected'; r.respondedAt = Date.now(); return null; }
+    const subject = s.persons[r.subjectId];
+    if (!subject) return 'The family member who sent this invitation no longer exists';
+    const spec = RELATIONS[r.relation]; if (!spec) return 'Unknown relationship';
+    const recipient = r.toId ? s.persons[r.toId] : findByEmail(s, r.toEmail);
+    if (!recipient) return 'NO_ACCOUNT';
+    if (recipient.id === r.subjectId) return 'A person cannot be related to themselves';
+    if (spec.gender && recipient.gender && recipient.gender !== spec.gender) return `Your profile gender does not match the requested ${r.relation} relationship`;
+    const rel = relationFor(r.subjectId, recipient.id, r.relation);
+    r.toId = recipient.id; const hasAccount = true;
+    if (s.relationships.some(x => x.id === rel.id)) return 'This relationship already exists';
+    s.relationships.push(rel);
+    r.status = 'accepted'; r.respondedAt = Date.now();
+    return { hasAccount };
+  });
+}
 function registerTreeRoutes(app, io, requireAuth) {
+  // PUBLIC preview (no login). The 64-char token is the secret, so only the person who
+  // received the email can call it. Lets the login/signup screen explain what to do.
+  app.get('/api/tree/invite/:token/info', async (req, res) => {
+    const s = readState(); const r = s.requests.find(x => x.token === req.params.token && isLive(x));
+    if (!r) return res.status(404).json({ error: 'This invitation is invalid, already used, or expired' });
+    const sender = s.persons[r.fromId]; const subject = s.persons[r.subjectId];
+    return res.json({ invite: {
+      fromName: sender?.name || 'A CmyRoots member',
+      subjectName: subject && subject.id !== r.fromId ? subject.name : null,
+      relation: r.relation, toEmail: r.toEmail, toName: r.toName || '',
+      registered: Boolean(await accountFor(r.toEmail)),
+    } });
+  });
+  // PUBLIC accept / reject from the email link (no login or signup required).
+  app.post('/api/tree/invite/:token/:action', async (req, res) => {
+    const { token, action } = req.params;
+    if (!['accept', 'reject'].includes(action)) return res.status(400).json({ error: 'Invalid invitation action' });
+    const pending = readState().requests.find(x => x.token === token && isLive(x));
+    if (!pending) return res.status(404).json({ error: 'This invitation is invalid, already answered, or expired' });
+
+    if (action === 'accept') {
+      // Check the database: is this email registered?
+      const account = await accountFor(pending.toEmail);
+      if (!account) {
+        return res.status(409).json({
+          code: 'NO_ACCOUNT',
+          email: pending.toEmail,
+          error: "You don't have an account in CmyRoots. Please create an account with this email, then accept the relation.",
+        });
+      }
+      // make sure the account exists as a person in the tree before linking
+      syncMembers([{ name: account.username, email: account.email, gender: account.gender }]);
+    }
+
+    const result = respondByToken({ token, accept: action === 'accept' });
+    if (!result.ok) {
+      if (result.error === 'NO_ACCOUNT') return res.status(409).json({ code: 'NO_ACCOUNT', email: pending.toEmail, error: "You don't have an account in CmyRoots. Please create an account with this email, then accept the relation." });
+      return res.status(400).json({ error: result.error });
+    }
+    broadcastTree(io);
+    return res.json({ ok: true, status: action === 'accept' ? 'accepted' : 'rejected', hasAccount: action === 'accept' });
+  });
   app.get('/api/tree/request/:token', requireAuth, (req, res) => {
     const s = readState(); const r = s.requests.find(x => x.token === req.params.token && isLive(x));
     if (!r) return res.status(404).json({ error: 'Invitation not found or expired' });

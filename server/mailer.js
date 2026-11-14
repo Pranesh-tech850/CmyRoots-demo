@@ -76,15 +76,23 @@ function sendRequestEmail({
   subjectName,
   relation,
   link,
+  isRegistered = true,
 }) {
   const who = fromEmail ? `${fromName} (${fromEmail})` : fromName;
   /* "their Mother"  or, for a grandparent, "Robert's Father" */
   const whose = subjectName ? `${subjectName}'s` : "their";
   const subject = `${fromName} wants to connect with you on CmyRoots`;
 
+  /* extra guidance for people who have no CmyRoots account yet */
+  const newUserText = isRegistered
+    ? ""
+    : `You look new to CmyRoots. To accept this request you first need an account: create one ` +
+      `using THIS email address (${to}), then accept the relation.\n\n`;
+
   const text =
     `Hi ${toName || ""},\n\n` +
     `${who} says you are ${whose} ${relation}.\n\n` +
+    newUserText +
     `If you know this person, open the link below and press Accept.\n` +
     `If you don't know them, just ignore this email - nothing will be added.\n\n` +
     `${link}\n\n` +
@@ -94,6 +102,15 @@ function sendRequestEmail({
   <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px">
     <h2 style="margin-top:0">Family connection request</h2>
     <p><strong>${esc(who)}</strong> says you are ${esc(whose)} <strong>${esc(relation)}</strong>.</p>
+    ${
+      isRegistered
+        ? ""
+        : `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px 14px;margin:16px 0;font-size:14px">
+            <strong>You look new to CmyRoots.</strong><br>
+            To accept this request, <strong>create an account first</strong> using this email address
+            (<strong>${esc(to)}</strong>), then accept the relation.
+          </div>`
+    }
     <p>Is this person your connection?</p>
     <p style="margin:24px 0">
       <a href="${esc(link)}"

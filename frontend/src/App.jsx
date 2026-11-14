@@ -1,19 +1,23 @@
-
 import React, { useState, useEffect, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 
 import Dashboard from "./components/Dashboard";
 import AuthPage from "./components/auth/AuthPage";
+import InvitePage from "./components/auth/InvitePage";
 import { checkSession, logout } from "./components/auth/authapi";
+import { notifyError } from "./components/alerts";
 
 function App() {
   const [session, setSession] = useState(null);
   const [checking, setChecking] = useState(true);
 
-  // Read the relationship request token from the email link.
-  const requestToken = new URLSearchParams(
-    window.location.search
-  ).get("token");
+  // Relationship request token from the email link (?token=...).
+  const [requestToken, setRequestToken] = useState(() =>
+    new URLSearchParams(window.location.search).get("token")
+  );
+
+  // Logged-out visitors with a token answer the request first (no login needed).
+  const [inviteHandled, setInviteHandled] = useState(false);
 
   // Restore the logged-in user using the HttpOnly cookie.
   useEffect(() => {
@@ -22,9 +26,7 @@ function App() {
     const restoreSession = async () => {
       try {
         const res = await checkSession();
-
         if (cancelled) return;
-
         if (res.status === "success" && res.user) {
           setSession({ user: res.user });
         } else {
@@ -39,27 +41,40 @@ function App() {
     };
 
     restoreSession();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // Login or signup succeeded.
   const handleAuthenticated = useCallback((user) => {
     setSession({ user });
   }, []);
 
-  // Logout from the backend and clear React state.
-const handleLogout = useCallback(async () => {
-  try {
-    await logout();
-    setSession(null);
-  } catch (err) {
-    console.error("Logout request failed:", err);
-    alert("Unable to log out. Please try again.");
-  }
-}, []);
+  const handleLogout = useCallback(async () => {
+    try {
+      await logout();
+      setSession(null);
+    } catch (err) {
+      console.error("Logout request failed:", err);
+      notifyError("Unable to log out. Please try again.", "Logout failed");
+    }
+  }, []);
+
+  // Called when the logged-out person finished (or postponed) the invitation.
+  const handleInviteFinished = useCallback(({ answered }) => {
+    if (answered) {
+      // answered or invalid -> remove the token from the address bar
+      const url = new URL(window.location.href);
+      url.searchParams.delete("token");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+      setRequestToken(null);
+    }
+    // "Decide later" keeps the token, so it is offered again after login.
+    setInviteHandled(true);
+  }, []);
+
+  // The logged-in person answered (or the link was bad): forget the token for good.
+  const handleInviteDone = useCallback(() => {
+    setRequestToken(null);
+  }, []);
 
   if (checking) {
     return (
@@ -73,17 +88,16 @@ const handleLogout = useCallback(async () => {
   }
 
   if (!session) {
+    if (requestToken && !inviteHandled) {
+      return <InvitePage token={requestToken} onFinished={handleInviteFinished} />;
+    }
     return (
-      <AuthPage onAuthenticated={handleAuthenticated} />
+      <AuthPage onAuthenticated={handleAuthenticated} inviteToken={requestToken} fromInvite={inviteHandled} />
     );
   }
 
   return (
-    <Dashboard
-      session={session}
-      onLogout={handleLogout}
-      requestToken={requestToken}
-    />
+    <Dashboard session={session} onLogout={handleLogout} requestToken={requestToken} onInviteDone={handleInviteDone} />
   );
 }
 

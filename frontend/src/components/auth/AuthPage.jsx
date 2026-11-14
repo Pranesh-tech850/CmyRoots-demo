@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Network,
   Mail,
@@ -16,6 +16,11 @@ import {
 
 import "../../styles/Auth.css";
 import { login, signup } from "./authapi";
+import { Swal } from "../alerts";
+import { SOCKET_URL } from "../constant";
+
+const esc = (v) =>
+  String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} .'_-]{1,38}[\p{L}\p{N}.]$/u;
@@ -48,7 +53,7 @@ const Field = ({ icon, label, error, children }) => (
   </label>
 );
 
-const AuthPage = ({ onAuthenticated }) => {
+const AuthPage = ({ onAuthenticated, inviteToken, fromInvite = false }) => {
   const [mode, setMode] = useState("login"); // "login" | "signup"
   const isSignup = mode === "signup";
 
@@ -66,6 +71,73 @@ const AuthPage = ({ onAuthenticated }) => {
   const [serverError, setServerError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  /* invitation opened from an email link (?token=...) while logged out */
+  const [invite, setInvite] = useState(null);
+  const lockedEmail = invite?.toEmail || "";
+
+  useEffect(() => {
+    if (!inviteToken) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(
+          `${SOCKET_URL}/api/tree/invite/${encodeURIComponent(inviteToken)}/info`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Invitation not found");
+        if (cancelled) return;
+
+        const inv = data.invite;
+        setInvite(inv);
+
+        const whose = inv.subjectName ? `${inv.subjectName}'s` : "their";
+        const line = `<b>${esc(inv.fromName)}</b> says you are ${esc(whose)} <b>${esc(inv.relation)}</b>.`;
+
+        if (inv.registered) {
+          /* already has an account -> just log in */
+          setMode("login");
+          setIdentifier(inv.toEmail);
+          await Swal.fire({
+            icon: "info",
+            title: "Family request waiting",
+            html: `<p>${line}</p><p>Please <b>log in</b> as <b>${esc(inv.toEmail)}</b> to accept or reject it.</p>`,
+            confirmButtonText: "Log in",
+            confirmButtonColor: "#111",
+          });
+        } else {
+          /* no account yet -> sign up with the invited email first */
+          setMode("signup");
+          setEmail(inv.toEmail);
+          if (inv.toName) setName(inv.toName);
+          /* the invite popup already explained this -> don't show a second alert */
+          if (fromInvite) return;
+          await Swal.fire({
+            icon: "question",
+            title: "You don't have a CmyRoots account",
+            html:
+              `<p>${line}</p>` +
+              `<p>You don't have an account in CmyRoots yet. Please <b>create an account</b> with this email address:<br><b>${esc(inv.toEmail)}</b></p>` +
+              `<p>Then accept the relation and it will appear in your family tree.</p>`,
+            confirmButtonText: "Sign up now",
+            confirmButtonColor: "#111",
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          await Swal.fire({
+            icon: "error",
+            title: "Invitation unavailable",
+            text: err.message,
+            confirmButtonColor: "#111",
+          });
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [inviteToken]);
+
   const touch = (k) => setTouched((t) => ({ ...t, [k]: true }));
 
   const switchMode = (m) => {
@@ -75,6 +147,10 @@ const AuthPage = ({ onAuthenticated }) => {
     setPassword("");
     setConfirm("");
     setShowPw(false);
+    if (lockedEmail) {
+      if (m === "signup") setEmail(lockedEmail);
+      else setIdentifier(lockedEmail);
+    }
   };
 
   /* field-level problems (shown after the field was touched or on submit) */
@@ -225,6 +301,8 @@ onAuthenticated(data.user);
                     autoComplete="email"
                     placeholder="you@example.com"
                     value={email}
+                    readOnly={Boolean(lockedEmail)}
+                    title={lockedEmail ? "This invitation was sent to this email address" : undefined}
                     onChange={(e) => setEmail(e.target.value)}
                     onBlur={() => touch("email")}
                   />
