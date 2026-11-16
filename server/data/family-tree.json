@@ -1,5 +1,5 @@
 {
-  "version": 245,
+  "version": 249,
   "persons": {
     "user:sarah": {
       "id": "user:sarah",
@@ -188,18 +188,6 @@
       "type": "parent",
       "a": "user:suarjbjbj",
       "b": "user:praneshwarannana"
-    },
-    {
-      "id": "sibling:user:pranesh mb:user:praneshwar m b",
-      "type": "sibling",
-      "a": "user:pranesh mb",
-      "b": "user:praneshwar m b"
-    },
-    {
-      "id": "parent:user:suarjbjbj:user:praneshwar m b",
-      "type": "parent",
-      "a": "user:suarjbjbj",
-      "b": "user:praneshwar m b"
     }
   ],
   "requests": [
@@ -787,7 +775,7 @@
       "toEmail": "ajithkumar260@gmail.com",
       "toName": "Ajitth",
       "relation": "Father",
-      "status": "pending",
+      "status": "cancelled",
       "createdAt": 1794718430245,
       "expiresAt": 1795323230245
     }
