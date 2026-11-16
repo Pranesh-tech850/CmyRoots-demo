@@ -138,6 +138,7 @@ const SCHEMA = `
       );
     END IF;
   END $$;
+  
 
 
   /* ---------------- user sessions ---------------- */
