@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import "./MyProfilePage.css";
+import ProfilePhotos from "./ProfilePhotos";
 
 const initialForm = {
   name: "",
@@ -28,7 +29,15 @@ const initialForm = {
   profilePicture: "",
 };
 
-const MyProfilePage = ({ currentUser, myEmail, onBack }) => {
+const MyProfilePage = ({
+  currentUser,
+  myEmail,
+  onBack,
+  chatMessages = [],
+  contacts = [],
+  groups = [],
+  onSendPhoto,
+}) => {
   const [profile, setProfile] = useState(null);
   const [form, setForm] = useState(initialForm);
   const [isEditing, setIsEditing] = useState(false);
@@ -307,6 +316,7 @@ const MyProfilePage = ({ currentUser, myEmail, onBack }) => {
 
   // Saved profile display
   return (
+       // Saved profile display
     <div className="my-profile-page">
       <div className="profile-page-header">
         <button className="profile-back-btn" onClick={onBack}>
@@ -343,6 +353,7 @@ const MyProfilePage = ({ currentUser, myEmail, onBack }) => {
         </div>
       </div>
 
+      {/* Personal Details card: heading AND grid stay inside it */}
       <div className="profile-details-card">
         <div className="profile-details-heading">
           <h3>Personal Details</h3>
@@ -393,9 +404,19 @@ const MyProfilePage = ({ currentUser, myEmail, onBack }) => {
           />
         </div>
       </div>
+
+      {/* Photos section: AFTER the details card, not inside it */}
+      <ProfilePhotos
+        currentUser={currentUser}
+        chatMessages={chatMessages}
+        contacts={contacts}
+        groups={groups}
+        onSendPhoto={onSendPhoto}
+      />
     </div>
   );
 };
+  
 
 const ProfileDetail = ({ icon, label, value }) => (
   <div className="profile-detail-item">

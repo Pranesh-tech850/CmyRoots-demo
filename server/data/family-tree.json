@@ -1,5 +1,5 @@
 {
-  "version": 249,
+  "version": 253,
   "persons": {
     "user:sarah": {
       "id": "user:sarah",
@@ -162,6 +162,12 @@
       "name": "Thala",
       "email": "ajithkumaran260@gmail.com",
       "gender": "M"
+    },
+    "user:priyapranesh": {
+      "id": "user:priyapranesh",
+      "name": "PriyaPranesh",
+      "email": "priyapranesh@gmail.com",
+      "gender": "F"
     }
   },
   "relationships": [
@@ -188,6 +194,12 @@
       "type": "parent",
       "a": "user:suarjbjbj",
       "b": "user:praneshwarannana"
+    },
+    {
+      "id": "spouse:user:praneshwar m b:user:priyapranesh",
+      "type": "spouse",
+      "a": "user:praneshwar m b",
+      "b": "user:priyapranesh"
     }
   ],
   "requests": [
@@ -778,6 +790,20 @@
       "status": "cancelled",
       "createdAt": 1794718430245,
       "expiresAt": 1795323230245
+    },
+    {
+      "id": "req_4160e802-1fa3-47e3-995a-e2722aec6909",
+      "token": "09c303a388c510d247bbe1cb0036d88e49083f5d8b96178fc8e94edb417a822a",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:priyapranesh",
+      "toEmail": "priyapranesh@gmail.com",
+      "toName": "PriyaPranesh",
+      "relation": "Spouse",
+      "status": "accepted",
+      "createdAt": 1794810736860,
+      "expiresAt": 1795415536860,
+      "respondedAt": 1794810746861
     }
   ]
 }

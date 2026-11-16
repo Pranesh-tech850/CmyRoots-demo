@@ -551,6 +551,38 @@ useEffect(() => {
     }
   };
 
+    /* send one photo to a person or group from the profile page.
+     target = a person's name, or "g:<id>" for a group */
+  const sendPhoto = async (file, target) => {
+    const socket = socketRef.current;
+    if (!socket) return { ok: false, error: "Not connected to the server" };
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
+      return { ok: false, error: "Please choose a PNG, JPG, GIF or WEBP image" };
+    }
+    if (file.size > MAX_IMAGE_BYTES) return { ok: false, error: "Image is too big (max 5 MB)" };
+
+    const group = groups.find((g) => `g:${g.id}` === target);
+    const payload = group
+      ? { groupId: group.id, text: "" }
+      : { to: target, text: "" };
+
+    try {
+      payload.image = { data: await file.arrayBuffer(), type: file.type };
+    } catch {
+      return { ok: false, error: "Could not read that image" };
+    }
+
+    return new Promise((resolve) => {
+      const failSafe = setTimeout(
+        () => resolve({ ok: false, error: "The server took too long to answer" }),
+        15000
+      );
+      socket.emit("message:send", payload, (res) => {
+        clearTimeout(failSafe);
+        resolve(res?.ok ? { ok: true } : { ok: false, error: res?.error || "Could not send photo" });
+      });
+    });
+  };
   /* ---- group chats ---- */
   const toggleGroupPick = (name) =>
     setGroupPick((prev) =>
@@ -681,6 +713,21 @@ useEffect(() => {
       onBack={() => handleNavigate("settings")}
     />
   );
+
+        case "my-profile":
+        case "my-profile":
+  return (
+    <MyProfilePage
+      currentUser={currentUser}
+      myEmail={myEmail}
+      onBack={() => handleNavigate("settings")}
+      chatMessages={chatMessages}
+      contacts={contacts}
+      groups={groups}
+      onSendPhoto={sendPhoto}
+    />
+  );
+
       default:
         return (
           <DashboardHome
