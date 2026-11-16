@@ -705,17 +705,7 @@ useEffect(() => {
   onCreateEvent={() => setActivePage("events")}
 />
         );
-        case "my-profile":
-  return (
-    <MyProfilePage
-      currentUser={currentUser}
-      myEmail={myEmail}
-      onBack={() => handleNavigate("settings")}
-    />
-  );
-
-        case "my-profile":
-        case "my-profile":
+      case "my-profile":
   return (
     <MyProfilePage
       currentUser={currentUser}
