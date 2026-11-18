@@ -3,12 +3,11 @@
 
    Takes the server snapshot { persons, relationships } and
    derives everything the UI needs:
-     - buildGraph : fast lookups (parents / children / spouses / siblings)
-     - getLabel   : "Father", "Son", "Wife"... relative to the viewer
-     - layoutTree : generation rows -> x/y positions
-                    + empty "Add person" cards (slots)
-                      for you AND for your parents' missing parents
-                      (Grandfather / Grandmother)
+     - buildGraph          : fast lookups (parents / children / spouses / siblings)
+     - getLabel            : "Father", "Son", "Wife"... relative to the viewer
+     - layoutTree          : generation rows -> x/y positions
+                             + empty "Add person" cards (slots)
+     - findConnectionPath  : chain of people linking the viewer to someone
 ========================================================= */
 
 export const relationshipTemplates = [
@@ -393,4 +392,67 @@ export function layoutTree(realGraph, focusId) {
   });
 
   return { positions, placeholders };
+}
+
+/* =========================================================
+   CONNECTION PATH
+
+   Shortest chain of people linking fromId (viewer) to toId.
+   Each step's label is how THAT person relates to the step before.
+========================================================= */
+
+const STEP_LABELS = {
+  parent: ["Father", "Mother", "Parent"],
+  child: ["Son", "Daughter", "Child"],
+  spouse: ["Husband", "Wife", "Spouse"],
+  sibling: ["Brother", "Sister", "Sibling"],
+};
+
+export function findConnectionPath(g, fromId, toId) {
+  if (!g.byId[fromId] || !g.byId[toId]) return [];
+
+  const prev = { [fromId]: null };
+  const queue = [fromId];
+  let found = fromId === toId;
+
+  while (queue.length && !found) {
+    const id = queue.shift();
+    const neighbours = [
+      ["spouse", g.spouses(id)],
+      ["sibling", g.siblings(id)],
+      ["parent", g.parents(id)],
+      ["child", g.children(id)],
+    ];
+    for (const [kind, set] of neighbours) {
+      for (const n of set) {
+        if (n in prev || !g.byId[n]) continue;
+        prev[n] = { from: id, kind };
+        if (n === toId) {
+          found = true;
+          break;
+        }
+        queue.push(n);
+      }
+      if (found) break;
+    }
+  }
+
+  if (!found) return [];
+
+  const chain = [];
+  for (let cur = toId; cur; cur = prev[cur]?.from) {
+    chain.unshift(cur);
+    if (cur === fromId) break;
+  }
+
+  return chain.map((id, i) => {
+    if (i === 0) return { id, name: g.byId[id].name, kind: null, label: "Me" };
+    const { kind } = prev[id];
+    return {
+      id,
+      name: g.byId[id].name,
+      kind,
+      label: byGender(g.byId[id].gender, ...STEP_LABELS[kind]),
+    };
+  });
 }

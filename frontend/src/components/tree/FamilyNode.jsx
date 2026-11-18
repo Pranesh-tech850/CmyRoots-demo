@@ -10,8 +10,8 @@ const FamilyNode = ({ data }) => {
       className={`family-node ${
         data.isMe ? "family-node-me" : ""
       } ${data.isSelected ? "family-node-selected" : ""} ${
-        isEmpty ? "family-node-empty" : ""
-      }`}
+        data.isOnPath ? "family-node-path" : ""
+      } ${isEmpty ? "family-node-empty" : ""}`}
       style={{
         ...(data.isSelected
           ? { outline: "2px solid #2563eb", outlineOffset: "3px" }
@@ -20,36 +20,16 @@ const FamilyNode = ({ data }) => {
       }}
     >
       {/* TOP */}
-      <Handle
-        id="top"
-        type="target"
-        position={Position.Top}
-        className="family-handle"
-      />
+      <Handle id="top" type="target" position={Position.Top} className="family-handle" />
 
       {/* BOTTOM */}
-      <Handle
-        id="bottom"
-        type="source"
-        position={Position.Bottom}
-        className="family-handle"
-      />
+      <Handle id="bottom" type="source" position={Position.Bottom} className="family-handle" />
 
       {/* LEFT */}
-      <Handle
-        id="left"
-        type="target"
-        position={Position.Left}
-        className="family-handle"
-      />
+      <Handle id="left" type="target" position={Position.Left} className="family-handle" />
 
       {/* RIGHT */}
-      <Handle
-        id="right"
-        type="source"
-        position={Position.Right}
-        className="family-handle"
-      />
+      <Handle id="right" type="source" position={Position.Right} className="family-handle" />
 
       {/* AVATAR */}
       <div
@@ -69,9 +49,7 @@ const FamilyNode = ({ data }) => {
       </div>
 
       {/* RELATION */}
-      <div className="family-node-relation">
-        {data.relation}
-      </div>
+      <div className="family-node-relation">{data.relation}</div>
     </div>
   );
 };

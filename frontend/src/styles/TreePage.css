@@ -1157,3 +1157,87 @@
 .family-tree-flow .react-flow__node {
   cursor: pointer !important;
 }
+
+
+/* ===== CONNECTION PATH BAR ===== */
+.connection-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 5;
+  width: calc(100% - 32px);
+  max-width: 560px;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 8px;
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #d9d9d9;
+  border-radius: 14px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+  color: #222;
+  font-size: 14px;
+}
+
+.connection-bar-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #111;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.connection-bar-link:hover { color: #2563eb; }
+
+.family-node-path {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+
+/* ===== CONNECTION PATH MODAL ===== */
+.connection-modal { max-width: 440px; max-height: 85vh; overflow-y: auto; }
+.connection-path { list-style: none; margin: 0 0 4px; padding: 0; }
+.connection-step { margin: 0; padding: 0; }
+
+.connection-link {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 38px;
+  padding-left: 19px;
+}
+.connection-link-line { align-self: stretch; width: 2px; background: #cbd5e1; }
+.connection-link-text { color: #64748b; font-size: 12.5px; line-height: 1.4; }
+.connection-link-text b { color: #1d4ed8; font-weight: 600; }
+
+.connection-person {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid #eeeeee;
+  border-radius: 12px;
+  background: #fafafa;
+}
+.connection-person.is-start { border-color: #171717; background: #fff; }
+.connection-person.is-end { border-color: #2563eb; background: #eff6ff; }
+
+.connection-avatar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #6b7280;
+}
+.connection-name { color: #222; font-size: 14px; font-weight: 600; }
+.connection-role { margin-top: 2px; color: #888; font-size: 12px; }
