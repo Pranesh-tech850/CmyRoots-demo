@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { ReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { User, UserPlus, Trash2 } from "lucide-react";
+import { User, UserPlus, Trash2, Sparkles, GitBranch, Check, X } from "lucide-react";
 import Swal from "sweetalert2";
 import { SOCKET_URL } from "../constant";
 import familyTree from "../../assets/family-tree.png";
 import "../../styles/TreePage.css";
+import "../../styles/Suggestions.css";
 import FamilyNode from "./FamilyNode";
 import AddRelativeModal from "./AddRelativeModal";
 import ProfileModal from "./ProfileModal";
@@ -46,6 +47,19 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
       socket.off("connect", fetchState);
     };
   }, [socket]);
+
+  const [suggestions, setSuggestions] = useState([]);
+  const [visibleIds, setVisibleIds] = useState(null); // who this person has in their tree (null = not loaded yet)
+  const [pathSuggestion, setPathSuggestion] = useState(null);
+
+  // ask the server who is in MY tree and who is only suggested to me
+  useEffect(() => {
+    if (!socket) return;
+    socket.emit("tree:getSuggestions", (data) => {
+      setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []);
+      setVisibleIds(Array.isArray(data?.visible) ? data.visible : null);
+    });
+  }, [socket, snapshot.version]);
 
   // An invitation link keeps its token in the URL through login/signup.
   // Once this page is mounted, verify the logged-in email and ask for an explicit decision.
@@ -117,7 +131,20 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
   const [modalMode, setModalMode] = useState("propose");
   const [selectedPersonId, setSelectedPersonId] = useState(null);
 
-  const graph = useMemo(() => buildGraph(snapshot), [snapshot]);
+  /* My tree = me + people I'm directly linked to + relatives I accepted.
+     fullGraph knows everybody (used for labels and connection paths). */
+  const visibleSnapshot = useMemo(() => {
+    if (!visibleIds) return snapshot;
+    const keep = new Set(visibleIds);
+    return {
+      ...snapshot,
+      persons: snapshot.persons.filter((p) => keep.has(p.id)),
+      relationships: snapshot.relationships.filter((r) => keep.has(r.a) && keep.has(r.b)),
+    };
+  }, [snapshot, visibleIds]);
+
+  const graph = useMemo(() => buildGraph(visibleSnapshot), [visibleSnapshot]);
+  const fullGraph = useMemo(() => buildGraph(snapshot), [snapshot]);
 
   const viewerId = useMemo(
     () => snapshot.persons.find((p) => normName(p.name) === normName(currentUser))?.id,
@@ -131,9 +158,9 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
     if (!viewerId || !activeId || activeId === viewerId) return [];
     return findConnectionPath(graph, viewerId, activeId).map((step) => ({
       ...step,
-      relToYou: getLabel(graph, viewerId, step.id),
+      relToYou: getLabel(fullGraph, viewerId, step.id),
     }));
-  }, [graph, viewerId, activeId]);
+  }, [graph, fullGraph, viewerId, activeId]);
 
   const pathIds = useMemo(
     () => new Set(showPath ? pathSteps.map((s) => s.id) : []),
@@ -170,7 +197,7 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
       position: positions[id],
       data: {
         name: graph.byId[id].name,
-        relation: getLabel(graph, viewerId, id),
+        relation: getLabel(fullGraph, viewerId, id),
         isMe: id === viewerId,
         isSelected: id === activeId,
         isOnPath: pathIds.has(id),
@@ -227,7 +254,7 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
       });
 
     return { nodes: [...personNodes, ...slotNodes], edges: treeEdges };
-  }, [graph, snapshot.relationships, viewerId, activeId, pathIds]);
+  }, [graph, fullGraph, snapshot.relationships, viewerId, activeId, pathIds]);
 
   const activeNode = nodes.find((n) => n.id === activeId);
 
@@ -239,6 +266,32 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
       confirmButtonColor: "#222",
       confirmButtonText: "OK",
     });
+
+  const answerSuggestion = (personId, accept) =>
+    socket.emit("tree:respondSuggestion", { personId, accept }, (res) => {
+      if (!res?.ok) {
+        showMessage("Suggestion unavailable", res?.error || "Could not update this suggestion.", "error");
+      }
+    });
+
+  /* "Ajithkumar may be your Grandfather" */
+  const suggestionLabel = (sg) => {
+    const label = getLabel(fullGraph, viewerId, sg.personId);
+    return label === "Relative" ? "relative" : label;
+  };
+
+  /* how the suggested person would connect to you (last step shows the suggested relation) */
+  const suggestionSteps = useMemo(() => {
+    if (!pathSuggestion || !viewerId) return [];
+    const steps = findConnectionPath(fullGraph, viewerId, pathSuggestion.personId);
+    return steps.map((step, i) => ({
+      ...step,
+      relToYou:
+        i === steps.length - 1
+          ? `${getLabel(fullGraph, viewerId, step.id)} (suggested)`
+          : getLabel(fullGraph, viewerId, step.id),
+    }));
+  }, [pathSuggestion, fullGraph, viewerId]);
 
   const handleNodeClick = (event, node) => {
     if (node.data.isEmpty) {
@@ -525,6 +578,58 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
         </div>
       </div>
 
+      {suggestions.length > 0 && (
+        <section className="suggest-panel" aria-label="Suggested connections">
+          <div className="suggest-panel-head">
+            <span className="suggest-panel-title">
+              <Sparkles size={16} /> Suggested connections
+            </span>
+            <span className="suggest-count">{suggestions.length}</span>
+          </div>
+
+          <div className="suggest-list">
+            {suggestions.map((sg) => (
+              <article className="suggest-card" key={sg.personId}>
+                <div className="suggest-avatar">
+                  {(sg.personName || "?").charAt(0).toUpperCase()}
+                </div>
+
+                <div className="suggest-body">
+                  <p className="suggest-text">
+                    <strong>{sg.personName}</strong> may be your <strong>{suggestionLabel(sg)}</strong>
+                  </p>
+                  {sg.viaName && <p className="suggest-sub">Connected through {sg.viaName}</p>}
+                </div>
+
+                <div className="suggest-actions">
+                  <button
+                    type="button"
+                    className="suggest-btn suggest-btn-ghost"
+                    onClick={() => setPathSuggestion(sg)}
+                  >
+                    <GitBranch size={15} /> Connection path
+                  </button>
+                  <button
+                    type="button"
+                    className="suggest-btn suggest-btn-primary"
+                    onClick={() => answerSuggestion(sg.personId, true)}
+                  >
+                    <Check size={15} /> Accept
+                  </button>
+                  <button
+                    type="button"
+                    className="suggest-btn suggest-btn-muted"
+                    onClick={() => answerSuggestion(sg.personId, false)}
+                  >
+                    <X size={15} /> Ignore
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="family-tree-area">
         <img
           src={familyTree}
@@ -606,6 +711,15 @@ const TreePage = ({ socket, currentUser, requestToken, onInviteDone }) => {
           personName={activeNode.data.name}
           relation={String(activeNode.data.relation)}
           onClose={() => setShowPath(false)}
+        />
+      )}
+
+      {pathSuggestion && (
+        <ConnectionPathModal
+          steps={suggestionSteps}
+          personName={pathSuggestion.personName}
+          relation={suggestionLabel(pathSuggestion)}
+          onClose={() => setPathSuggestion(null)}
         />
       )}
 

@@ -27,7 +27,7 @@ function ensureStorage() {
 function readState() {
   ensureStorage();
   const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  return { version: Number(parsed.version) || 0, persons: parsed.persons || {}, relationships: Array.isArray(parsed.relationships) ? parsed.relationships : [], requests: Array.isArray(parsed.requests) ? parsed.requests : [] };
+  return { version: Number(parsed.version) || 0, persons: parsed.persons || {}, relationships: Array.isArray(parsed.relationships) ? parsed.relationships : [], requests: Array.isArray(parsed.requests) ? parsed.requests : [], dismissed: Array.isArray(parsed.dismissed) ? parsed.dismissed : [], views: parsed.views && typeof parsed.views === 'object' ? parsed.views : {} };
 }
 function writeState(state) {
   ensureStorage();
@@ -75,6 +75,64 @@ function connectedTo(state, startId) {
   }
   return seen;
 }
+// ---- Per-person tree view ---------------------------------------------------------
+// Everyone's tree starts with: themselves + the people they are DIRECTLY linked to +
+// extended relatives they accepted. Anyone else who is linked to somebody they can already
+// see (for example their father's father) is only SUGGESTED until they accept or ignore.
+function viewOf(state, viewerId) {
+  const v = (state.views || {})[viewerId] || {};
+  return { accepted: Array.isArray(v.accepted) ? v.accepted : [], ignored: Array.isArray(v.ignored) ? v.ignored : [] };
+}
+function saveView(state, viewerId, view) {
+  state.views = state.views || {};
+  state.views[viewerId] = view;
+}
+function visibleFor(state, viewerId) {
+  const visible = new Set([viewerId]);
+  for (const r of state.relationships) {
+    if (r.a === viewerId) visible.add(r.b);
+    if (r.b === viewerId) visible.add(r.a);
+  }
+  viewOf(state, viewerId).accepted.forEach(id => { if (state.persons[id]) visible.add(id); });
+  // keep only people who are still connected to you through other visible people
+  const reach = new Set([viewerId]); const queue = [viewerId];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const r of state.relationships) {
+      const next = r.a === cur ? r.b : r.b === cur ? r.a : null;
+      if (next && visible.has(next) && !reach.has(next)) { reach.add(next); queue.push(next); }
+    }
+  }
+  return reach;
+}
+// personId -> the visible person they are linked through
+function candidatesFor(state, viewerId) {
+  const visible = visibleFor(state, viewerId);
+  const ignored = new Set(viewOf(state, viewerId).ignored);
+  const out = new Map();
+  for (const r of state.relationships) {
+    for (const [from, to] of [[r.a, r.b], [r.b, r.a]]) {
+      if (visible.has(from) && !visible.has(to) && !ignored.has(to) && state.persons[to] && !out.has(to)) out.set(to, from);
+    }
+  }
+  return out;
+}
+function suggestionsFor(state, viewerId) {
+  return [...candidatesFor(state, viewerId)].map(([personId, viaId]) => ({
+    personId, personName: state.persons[personId].name, viaId, viaName: state.persons[viaId]?.name || '',
+  }));
+}
+function respondSuggestion({ viewerId, personId, accept }) {
+  return commit(s => {
+    if (!candidatesFor(s, viewerId).has(personId)) return 'This suggestion is no longer available';
+    const view = viewOf(s, viewerId);
+    if (accept) view.accepted = [...new Set([...view.accepted, personId])];
+    else view.ignored = [...new Set([...view.ignored, personId])];
+    saveView(s, viewerId, view);
+    return null;
+  });
+}
+
 function findByName(state, name) {
   const target = normName(name);
   return Object.values(state.persons).find(p => normName(p.name) === target);
@@ -174,8 +232,16 @@ function removeRelation({ ownerId, personId }) {
   if (!personId || personId === ownerId) return { ok: false, error: 'Invalid person' };
   return commit(s => {
     if (!s.persons[ownerId] || !s.persons[personId]) return 'Person not found';
-    if (!connectedTo(s, ownerId).has(personId)) return 'This person is not in your connected family';
-    s.relationships = s.relationships.filter(r => !((r.a === ownerId && r.b === personId) || (r.a === personId && r.b === ownerId)));
+    if (!visibleFor(s, ownerId).has(personId)) return 'This person is not in your family tree';
+    // 1) delete the direct links between you and this person (if there are any)
+    s.relationships = s.relationships.filter(r => !((r.a === ownerId && r.b === personId) || (r.b === ownerId && r.a === personId)));
+    // 2) hide them from YOUR tree, so they do not stay on screen or come back as a suggestion
+    const view = viewOf(s, ownerId);
+    view.accepted = view.accepted.filter(id => id !== personId);
+    if (!view.ignored.includes(personId)) view.ignored.push(personId);
+    saveView(s, ownerId, view);
+    // Placeholder people (not real accounts) with no links left are deleted completely.
+    if (!isUserId(personId) && !s.relationships.some(r => r.a === personId || r.b === personId)) delete s.persons[personId];
     return null;
   });
 }
@@ -264,6 +330,16 @@ function registerTreeHandlers(io, socket) {
       const r = s.requests.find(x => x.id === payload.requestId && x.fromId === fromId && isLive(x));
       if (!r) return 'Pending request not found'; r.status = 'cancelled'; return null;
     });
+    if (result.ok) broadcastTree(io);
+    if (typeof ack === 'function') ack(result.ok ? { ok: true } : result);
+  });
+  socket.on('tree:getSuggestions', ack => {
+    if (typeof ack !== 'function') return;
+    const state = readState();
+    ack({ visible: [...visibleFor(state, fromId)], suggestions: suggestionsFor(state, fromId) });
+  });
+  socket.on('tree:respondSuggestion', (payload = {}, ack) => {
+    const result = respondSuggestion({ viewerId: fromId, personId: payload.personId, accept: Boolean(payload.accept) });
     if (result.ok) broadcastTree(io);
     if (typeof ack === 'function') ack(result.ok ? { ok: true } : result);
   });

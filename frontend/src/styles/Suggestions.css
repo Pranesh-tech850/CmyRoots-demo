@@ -1,0 +1,175 @@
+/* ===== Suggested connections (modern card design) ===== */
+.suggest-panel {
+  --sg-bg: rgba(255, 255, 255, 0.82);
+  --sg-border: rgba(99, 102, 241, 0.18);
+  --sg-text: #111827;
+  --sg-sub: #6b7280;
+  --sg-accent: #4f46e5;
+  --sg-accent-2: #7c3aed;
+  margin: 0 0 18px;
+  padding: 14px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(238, 242, 255, 0.9), rgba(250, 245, 255, 0.9));
+  border: 1px solid var(--sg-border);
+  box-shadow: 0 10px 30px -12px rgba(79, 70, 229, 0.25);
+  backdrop-filter: blur(8px);
+  animation: sg-in 0.35s ease both;
+}
+
+.suggest-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 4px 10px;
+}
+
+.suggest-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--sg-accent);
+}
+
+.suggest-count {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--sg-accent), var(--sg-accent-2));
+}
+
+.suggest-list {
+  display: grid;
+  gap: 10px;
+}
+
+.suggest-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px 12px 18px;
+  border-radius: 14px;
+  background: var(--sg-bg);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 2px 10px rgba(17, 24, 39, 0.06);
+  overflow: hidden;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.suggest-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--sg-accent), var(--sg-accent-2));
+}
+
+.suggest-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px -10px rgba(79, 70, 229, 0.35);
+}
+
+.suggest-avatar {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--sg-accent), var(--sg-accent-2));
+  box-shadow: 0 6px 14px -6px rgba(79, 70, 229, 0.6);
+}
+
+.suggest-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.suggest-text {
+  margin: 0;
+  font-size: 0.97rem;
+  color: var(--sg-text);
+  line-height: 1.35;
+}
+
+.suggest-text strong:last-child {
+  color: var(--sg-accent);
+}
+
+.suggest-sub {
+  margin: 3px 0 0;
+  font-size: 0.8rem;
+  color: var(--sg-sub);
+}
+
+.suggest-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.suggest-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.suggest-btn:hover { transform: translateY(-1px); }
+.suggest-btn:active { transform: translateY(0); }
+.suggest-btn:focus-visible { outline: 2px solid var(--sg-accent); outline-offset: 2px; }
+
+.suggest-btn-primary {
+  color: #fff;
+  background: linear-gradient(135deg, var(--sg-accent), var(--sg-accent-2));
+  box-shadow: 0 6px 14px -6px rgba(79, 70, 229, 0.7);
+}
+
+.suggest-btn-ghost {
+  color: var(--sg-accent);
+  background: rgba(79, 70, 229, 0.08);
+  border-color: rgba(79, 70, 229, 0.2);
+}
+.suggest-btn-ghost:hover { background: rgba(79, 70, 229, 0.14); }
+
+.suggest-btn-muted {
+  color: #6b7280;
+  background: #fff;
+  border-color: #e5e7eb;
+}
+.suggest-btn-muted:hover { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+
+@keyframes sg-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 720px) {
+  .suggest-card { flex-wrap: wrap; }
+  .suggest-actions { width: 100%; justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .suggest-panel, .suggest-card, .suggest-btn { animation: none; transition: none; }
+}

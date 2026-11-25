@@ -159,6 +159,25 @@ export function getLabel(g, viewerId, id) {
   for (const c of g.children(viewerId)) {
     if (g.spouses(c).has(id)) return byGender(gender, "Son-in-law", "Daughter-in-law", "Child-in-law");
   }
+    /* parent of my sibling -> Father / Mother (siblings share parents) */
+  for (const sib of g.siblings(viewerId)) {
+    if (g.parents(sib).has(id)) return byGender(gender, "Father", "Mother", "Parent");
+  }
+  /* spouse of my parent -> Mother / Father */
+  for (const p of g.parents(viewerId)) {
+    if (g.spouses(p).has(id)) return byGender(gender, "Father", "Mother", "Parent's spouse");
+  }
+  /* sibling of my child -> Son / Daughter */
+  for (const c of g.children(viewerId)) {
+    if (g.siblings(c).has(id)) return byGender(gender, "Son", "Daughter", "Child");
+  }
+  /* spouse of my grandparent / great-grandparent -> Grandmother / Grandfather */
+  for (const sp of g.spouses(id)) {
+    const depth = ancestorDepth(g, viewerId, sp);
+    if (depth >= 2) {
+      return "Great-".repeat(depth - 2) + byGender(gender, "Grandfather", "Grandmother", "Grandparent");
+    }
+  }
   return "Relative";
 }
 
@@ -193,8 +212,11 @@ function withGrandparentSlots(g, focusId) {
     .filter((p) => g.byId[p])
     .forEach((p) => {
       const grandparents = [...g.parents(p)].filter((id) => g.byId[id]);
-      const hasFather = grandparents.some((id) => g.byId[id].gender === "M");
-      const hasMother = grandparents.some((id) => g.byId[id].gender === "F");
+      /* a grandfather's wife (or a grandmother's husband) also fills the slot */
+      const grandSide = new Set(grandparents);
+      grandparents.forEach((gp) => g.spouses(gp).forEach((sp) => g.byId[sp] && grandSide.add(sp)));
+      const hasFather = [...grandSide].some((id) => g.byId[id].gender === "M");
+      const hasMother = [...grandSide].some((id) => g.byId[id].gender === "F");
 
       const make = (relation, gender, label) => {
         const vid = `__slot:${p}:${relation}`;
