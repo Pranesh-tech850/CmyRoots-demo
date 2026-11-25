@@ -1,5 +1,5 @@
 {
-  "version": 462,
+  "version": 506,
   "persons": {
     "user:sarah": {
       "id": "user:sarah",
@@ -238,9 +238,15 @@
       "b": "user:praneshwar m b"
     },
     {
-      "id": "sibling:user:pranesh:user:priyapranesh",
-      "type": "sibling",
-      "a": "user:pranesh",
+      "id": "parent:user:praneshwar m b:user:ajithkumar",
+      "type": "parent",
+      "a": "user:praneshwar m b",
+      "b": "user:ajithkumar"
+    },
+    {
+      "id": "parent:user:praneshwar m b:user:priyapranesh",
+      "type": "parent",
+      "a": "user:praneshwar m b",
       "b": "user:priyapranesh"
     }
   ],
@@ -1565,6 +1571,188 @@
       "createdAt": 1795593948532,
       "expiresAt": 1796198748532,
       "respondedAt": 1795593966651
+    },
+    {
+      "id": "req_ee9478dc-36aa-456b-9a2b-f5e68b4ee057",
+      "token": "569450b799310383051a7cb12552448b6ebafa9d77d0b398fb17aff66e378417",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:gopal ram",
+      "toEmail": "balajisurabi@gmail.com",
+      "toName": "Gopal ram",
+      "relation": "Father",
+      "status": "accepted",
+      "createdAt": 1795601817518,
+      "expiresAt": 1796206617518,
+      "respondedAt": 1795601824436
+    },
+    {
+      "id": "req_7bbd8b79-cf8e-4cc2-948d-2d7b0999cf01",
+      "token": "4bf7a9ecd6028d6bc2e26d95dcbbf0992db4f93073f3f857e66a665212849ffa",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:guru",
+      "toEmail": "mbpraneshwar3@gmail.com",
+      "toName": "guru",
+      "relation": "Brother",
+      "status": "accepted",
+      "createdAt": 1795601865602,
+      "expiresAt": 1796206665602,
+      "respondedAt": 1795601874539
+    },
+    {
+      "id": "req_2305efe9-0a48-43eb-bafe-d110a7dfb056",
+      "token": "4aff45f6a66f409ef01c68cd749d25c50a1198ee5ca2280ac83e80f81c91d1a4",
+      "fromId": "user:guru",
+      "subjectId": "user:guru",
+      "toId": "user:balaji",
+      "toEmail": "ajithkumar260@gmail.com",
+      "toName": "Balaji",
+      "relation": "Son",
+      "status": "accepted",
+      "createdAt": 1795601999634,
+      "expiresAt": 1796206799634,
+      "respondedAt": 1795602011134
+    },
+    {
+      "id": "req_75535161-8910-455f-860d-bf7f9b70effd",
+      "token": "a4f140b9d9344d6728424543fc6eb47b04fc08378239b63f7284ed3f2d265022",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:ajithkumar",
+      "toEmail": "ajithumaran260@gmail.com",
+      "toName": "Ajithkumar",
+      "relation": "Son",
+      "status": "accepted",
+      "createdAt": 1795602199400,
+      "expiresAt": 1796206999400,
+      "respondedAt": 1795602208183
+    },
+    {
+      "id": "req_85aad3ba-93b0-4856-a893-5a076cffa291",
+      "token": "ce2d551c5272ea7e9f499500e004b525500ed0c2809bd0c7e20bde43a77497af",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:gopal ram",
+      "toEmail": "balajisurabi@gmail.com",
+      "toName": "Gopal ram",
+      "relation": "Father",
+      "status": "accepted",
+      "createdAt": 1795602605630,
+      "expiresAt": 1796207405630,
+      "respondedAt": 1795602612180
+    },
+    {
+      "id": "req_314f6158-ae3d-47c1-9c78-e52ef33e08f3",
+      "token": "06b103a8e7f3e8501146e9dbbeefc37f060a87ab9ca57f139ec03e235f212c5c",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:ajithkumar",
+      "toEmail": "ajithumaran260@gmail.com",
+      "toName": "Ajithkumar",
+      "relation": "Son",
+      "status": "accepted",
+      "createdAt": 1795602630829,
+      "expiresAt": 1796207430829,
+      "respondedAt": 1795602637313
+    },
+    {
+      "id": "req_88383510-d287-457c-a917-ab211e4dfde6",
+      "token": "002f2126041f9d64633372da2e7080f8afb6b7eafb1e1da5c256783ca35c4123",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:guru",
+      "toEmail": "mbpraneshwar3@gmail.com",
+      "toName": "guru",
+      "relation": "Brother",
+      "status": "accepted",
+      "createdAt": 1795602673197,
+      "expiresAt": 1796207473197,
+      "respondedAt": 1795602682179
+    },
+    {
+      "id": "req_52d8aa46-ddfb-42e7-b5be-16461aac6111",
+      "token": "ec69ae2edbe43a1920356957cec3053167c55c429747204ccad93d95741ecf99",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:priyapranesh",
+      "toEmail": "priyapranesh@gmail.com",
+      "toName": "PriyaPranesh",
+      "relation": "Sister",
+      "status": "accepted",
+      "createdAt": 1795602737879,
+      "expiresAt": 1796207537879,
+      "respondedAt": 1795602743813
+    },
+    {
+      "id": "req_5ca7ff32-422b-41ec-9846-81274146fe49",
+      "token": "4d1bf534851e52e3212889b1591c41407f08f6ccc37a03424a1c08263dfa47f4",
+      "fromId": "user:guru",
+      "subjectId": "user:guru",
+      "toId": "user:priyapranesh",
+      "toEmail": "priyapranesh@gmail.com",
+      "toName": "PriyaPranesh",
+      "relation": "Sister",
+      "status": "accepted",
+      "createdAt": 1795602836663,
+      "expiresAt": 1796207636663,
+      "respondedAt": 1795602852579
+    },
+    {
+      "id": "req_2fb74ab0-2a78-488a-bef4-75b53a01013f",
+      "token": "7a7e0a6917e428605763d4d1ccb42ea5974f29dd754281ffdc8c8f18d8ff110b",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:gopal ram",
+      "toEmail": "balajisurabi@gmail.com",
+      "toName": "Gopal ram",
+      "relation": "Father",
+      "status": "accepted",
+      "createdAt": 1795603719897,
+      "expiresAt": 1796208519897,
+      "respondedAt": 1795603732480
+    },
+    {
+      "id": "req_fad01083-01bc-4314-9ce6-5a4bdb5edf3a",
+      "token": "af810c94bd39bc18fda792569a11bbe018001cf65d8a67bc6db1eb74df24243c",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:guru",
+      "toEmail": "mbpraneshwar3@gmail.com",
+      "toName": "guru",
+      "relation": "Brother",
+      "status": "accepted",
+      "createdAt": 1795603758675,
+      "expiresAt": 1796208558675,
+      "respondedAt": 1795603769213
+    },
+    {
+      "id": "req_68f16405-9ea4-4d44-8461-9582a36a72bd",
+      "token": "17297aa1a642e0b2e63fa94fa375113a874d2e51e30dd2ef5f80e2e726e4b29e",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:ajithkumar",
+      "toEmail": "ajithumaran260@gmail.com",
+      "toName": "Ajithkumar",
+      "relation": "Son",
+      "status": "accepted",
+      "createdAt": 1795603857695,
+      "expiresAt": 1796208657695,
+      "respondedAt": 1795603867512
+    },
+    {
+      "id": "req_f34dc082-636f-4c65-bb50-46b6caebaf64",
+      "token": "4df39fb771965d177af1c96f8cbe7a178ff1d291dcd1d6d1b8e649e65fee100b",
+      "fromId": "user:praneshwar m b",
+      "subjectId": "user:praneshwar m b",
+      "toId": "user:priyapranesh",
+      "toEmail": "priyapranesh@gmail.com",
+      "toName": "PriyaPranesh",
+      "relation": "Daughter",
+      "status": "accepted",
+      "createdAt": 1795604043877,
+      "expiresAt": 1796208843877,
+      "respondedAt": 1795604050881
     }
   ],
   "dismissed": [
@@ -1581,12 +1769,14 @@
     "user:priyapranesh": {
       "accepted": [
         "user:priya",
-        "user:sura"
+        "user:sura",
+        "user:ajithkumar"
       ],
       "ignored": [
         "user:guru",
         "user:praneshwar m b",
-        "user:gopal ram"
+        "user:gopal ram",
+        "user:pranesh"
       ]
     },
     "user:balaji": {
@@ -1605,22 +1795,25 @@
         "user:priyapranesh",
         "user:guru",
         "user:gopal ram",
-        "user:balaji"
+        "user:balaji",
+        "user:ajithkumar"
       ]
     },
     "user:guru": {
       "accepted": [
-        "user:balaji",
-        "user:priyapranesh"
+        "user:ajithkumar"
       ],
       "ignored": [
         "user:gopal ram",
-        "user:praneshwar m b"
+        "user:praneshwar m b",
+        "user:balaji",
+        "user:priyapranesh"
       ]
     },
     "user:gopal ram": {
       "accepted": [
-        "user:priyapranesh"
+        "user:priyapranesh",
+        "user:ajithkumar"
       ],
       "ignored": [
         "user:guru",
@@ -1630,7 +1823,8 @@
     "user:ajithkumar": {
       "accepted": [
         "user:priyapranesh",
-        "user:guru"
+        "user:guru",
+        "user:balaji"
       ],
       "ignored": [
         "user:praneshwar m b",
